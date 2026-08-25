@@ -1,0 +1,26 @@
+{
+  "concentration": {
+    "MAE_normalized": 0.00019600223458837718,
+    "RMSE_normalized": 0.0002251683035865426,
+    "R2": -292036411392.0
+  },
+  "surface_coverage": {
+    "MAE_normalized": 0.007064501754939556,
+    "RMSE_normalized": 0.05553106963634491,
+    "R2": 0.996762216091156
+  },
+  "film_thickness": {
+    "MAE_normalized": 0.00696504907682538,
+    "RMSE_normalized": 0.05015869811177254,
+    "R2": 0.9974299073219299
+  },
+  "test_loss": 0.0018665480248940488,
+  "training_time_seconds": 619.7479354579999,
+  "best_validation_loss": 0.0014008744006666044,
+  "architecture": {
+    "modes_x": 16,
+    "modes_y": 16,
+    "width": 32,
+    "blocks": 4
+  }
+}

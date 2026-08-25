@@ -1,0 +1,19 @@
+{
+  "surface_coverage": {
+    "MAE_normalized": 0.0009199785999953747,
+    "RMSE_normalized": 0.0044388421811163425,
+    "R2": 0.9999793171882629
+  },
+  "film_thickness": {
+    "MAE_normalized": 0.0009503792389295995,
+    "RMSE_normalized": 0.004385095555335283,
+    "R2": 0.9999803304672241
+  },
+  "training_time_seconds": 1101.8012156680002,
+  "best_validation_loss": 0.00010430313423663999,
+  "physics_weights": {
+    "bounds": 0.1,
+    "geometry": 0.1,
+    "smoothness": 0.01
+  }
+}
