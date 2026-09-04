@@ -89,6 +89,7 @@ def main():
         time=np.concatenate([batch["time"] for batch in batches]),
         cycle=np.concatenate([batch["cycle"] for batch in batches]),
         phase=np.concatenate([batch["phase"] for batch in batches]),
+        phase_names=np.asarray(("initial", "pulse", "purge", "reaction", "post_reaction_purge")),
         x=simulator.x.detach().cpu().numpy(),
         y=simulator.y.detach().cpu().numpy(),
         solid_mask=simulator.solid_mask.detach().cpu().numpy(),

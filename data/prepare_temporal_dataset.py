@@ -68,6 +68,9 @@ def main():
     concentration = source["concentration"]
     surface_coverage = source["surface_coverage"]
     film_thickness = source["film_thickness"]
+    phase_names = source["phase_names"] if "phase_names" in source.files else np.asarray(
+        ("initial", "pulse", "purge", "reaction", "post_reaction_purge")
+    )
     num_trajectories = parameters.shape[0]
     train, validation, test = split_indices(
         num_trajectories,
@@ -104,7 +107,7 @@ def main():
         time=normalized_time.astype(np.float32),
         cycle=source["cycle"],
         phase=source["phase"],
-        phase_names=source["phase_names"],
+        phase_names=phase_names,
         concentration=normalized_fields[0],
         surface_coverage=normalized_fields[1],
         film_thickness=normalized_fields[2],
