@@ -68,11 +68,11 @@ class BatchedTransientALDCudaSimulator:
         desorption = torch.zeros_like(self.C)
         if pulse:
             adsorption[:, self.surface_mask] = (
-                self.k_ads[:, 0, 0, 0, None]
+                self.k_ads[:, 0, 0, None]
                 * self.C[:, self.surface_mask]
                 * (1.0 - self.theta[:, self.surface_mask])
             )
-            desorption[:, self.surface_mask] = self.k_des[:, 0, 0, 0, None] * self.theta[:, self.surface_mask]
+            desorption[:, self.surface_mask] = self.k_des[:, 0, 0, None] * self.theta[:, self.surface_mask]
         new_c = torch.clamp(self.C + self.dt * (diffusion - adsorption), min=0.0)
         new_c = torch.where(self.gas_mask, new_c, torch.zeros_like(new_c))
         active_3d = active[:, None, None]
@@ -86,7 +86,7 @@ class BatchedTransientALDCudaSimulator:
 
     def reaction_step(self):
         reaction = torch.zeros_like(self.theta)
-        reaction[:, self.surface_mask] = self.k_rxn[:, 0, 0, 0, None] * self.theta[:, self.surface_mask]
+        reaction[:, self.surface_mask] = self.k_rxn[:, 0, 0, None] * self.theta[:, self.surface_mask]
         self.h += self.dt * self.k_growth * reaction
         self.theta = torch.clamp(self.theta - self.dt * reaction, 0.0, 1.0)
 
