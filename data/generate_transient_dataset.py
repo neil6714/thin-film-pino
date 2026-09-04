@@ -3,8 +3,9 @@ import json
 from pathlib import Path
 
 import numpy as np
+import torch
 
-from physics.simulator import ThinFilmDepositionSimulator
+from physics.transient_cuda import TransientALDCudaSimulator
 
 
 SEED = 42
@@ -69,7 +70,7 @@ def sample_parameters(rng):
 
 
 def build_simulator(parameters, num_cycles):
-    return ThinFilmDepositionSimulator(
+    return TransientALDCudaSimulator(
         diffusivity=parameters[0],
         k_ads=parameters[1],
         k_des=parameters[2],
@@ -93,12 +94,13 @@ def snapshot_steps(num_steps, snapshots_per_phase):
 
 
 def append_snapshot(trajectory, simulator, time, cycle, phase):
+    concentration, surface_coverage, film_thickness = simulator.snapshot()
     trajectory["time"].append(time)
     trajectory["cycle"].append(cycle)
     trajectory["phase"].append(phase)
-    trajectory["concentration"].append(simulator.C.astype(np.float32).copy())
-    trajectory["surface_coverage"].append(simulator.theta.astype(np.float32).copy())
-    trajectory["film_thickness"].append(simulator.h.astype(np.float32).copy())
+    trajectory["concentration"].append(concentration)
+    trajectory["surface_coverage"].append(surface_coverage)
+    trajectory["film_thickness"].append(film_thickness)
 
 
 def advance_transport_phase(
@@ -120,11 +122,11 @@ def advance_transport_phase(
     capture_steps = snapshot_steps(num_steps, snapshots_per_phase)
 
     for step in range(1, num_steps + 1):
-        simulator._transport_step(pulse=pulse)
+        simulator.transport_step(pulse=pulse)
         time += simulator.dt
 
         if not pulse and step == num_steps:
-            simulator.C.fill(0.0)
+            simulator.C.zero_()
 
         if step in capture_steps:
             append_snapshot(trajectory, simulator, time, cycle, phase)
@@ -143,13 +145,7 @@ def advance_reaction_phase(
     capture_steps = snapshot_steps(num_steps, snapshots_per_phase)
 
     for step in range(1, num_steps + 1):
-        reaction = np.zeros_like(simulator.theta)
-        reaction[simulator.surface_mask] = (
-            simulator.k_rxn * simulator.theta[simulator.surface_mask]
-        )
-        simulator.h += simulator.dt * simulator.k_growth * reaction
-        simulator.theta -= simulator.dt * reaction
-        simulator.theta = np.clip(simulator.theta, 0.0, 1.0)
+        simulator.reaction_step()
         time += simulator.dt
 
         if step in capture_steps:
@@ -159,14 +155,14 @@ def advance_reaction_phase(
 
 
 def record_cycle_metrics(simulator, cycle, previous_thickness):
-    return simulator._record_cycle(cycle, previous_thickness)
+    return simulator.record_cycle_metrics(cycle, previous_thickness)
 
 
 def simulate_trajectory(parameters, num_cycles, snapshots_per_phase):
     simulator = build_simulator(parameters, num_cycles)
-    simulator.C.fill(0.0)
-    simulator.theta.fill(0.0)
-    simulator.h.fill(0.0)
+    simulator.C.zero_()
+    simulator.theta.zero_()
+    simulator.h.zero_()
     simulator.history = simulator._empty_history()
 
     trajectory = {
@@ -264,6 +260,7 @@ def main():
     print(f"Target trajectories: {args.num_samples}")
     print(f"ALD cycles per trajectory: {args.num_cycles}")
     print(f"Snapshots per phase: {args.snapshots_per_phase}")
+    print(f"CUDA device: {torch.cuda.get_device_name(0)}")
 
     while len(trajectories) < args.num_samples:
         sample = sample_parameters(rng)
@@ -322,10 +319,10 @@ def main():
                 "surface_coverage",
             )
         ),
-        x=simulator.x,
-        y=simulator.y,
-        solid_mask=simulator.solid_mask,
-        surface_mask=simulator.surface_mask,
+        x=simulator.x.detach().cpu().numpy(),
+        y=simulator.y.detach().cpu().numpy(),
+        solid_mask=simulator.solid_mask.detach().cpu().numpy(),
+        surface_mask=simulator.surface_mask.detach().cpu().numpy(),
         seed=args.seed,
         num_cycles=args.num_cycles,
         snapshots_per_phase=args.snapshots_per_phase,
