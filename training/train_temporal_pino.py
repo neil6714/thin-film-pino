@@ -1,4 +1,5 @@
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -50,7 +51,7 @@ def main():
     parser.add_argument("--input", required=True)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--physics-weight", type=float, default=0.1)
+    parser.add_argument("--physics-weight", type=float, default=1.0e-4)
     parser.add_argument("--output-dir", default="results/stage4d_temporal_pino")
     args = parser.parse_args()
     if not torch.cuda.is_available():
@@ -73,18 +74,32 @@ def main():
     model = TemporalFourierOperator().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     output = Path(args.output_dir); output.mkdir(parents=True, exist_ok=True)
+    history = {"train_total": [], "train_data": [], "train_physics": [], "validation_data": []}
+    best = float("inf")
+    def evaluate(loader):
+        model.eval(); total = 0.0; count = 0
+        with torch.no_grad():
+            for parameters, time, phase, target in loader:
+                parameters, time, phase, target = parameters.to(device), time.to(device), phase.to(device), target.to(device)
+                pred = model(parameters, time, coords)
+                total += (((pred - target).square() * mask[None, None]).sum()).item(); count += target.shape[0]
+        return total / max(count * float(mask.sum()) * target.shape[1], 1.0)
     for epoch in range(1, args.epochs + 1):
-        model.train(); total = 0.0
+        model.train(); total = data_total = physics_total = 0.0
         for parameters, time, phase, target in train_loader:
             parameters, time, phase, target = parameters.to(device), time.to(device), phase.to(device), target.to(device)
             pred = model(parameters, time, coords)
             data_loss = ((pred - target).square() * mask[None, None]).mean()
             pde_loss = physics_loss(pred, parameters * parameter_std + parameter_mean, time * time_std + time_mean, phase, mask, stats, float(data["x"][1] - data["x"][0]), float(data["y"][1] - data["y"][0]))
-            loss = data_loss + args.physics_weight * pde_loss
+            loss = data_loss + args.physics_weight * torch.nan_to_num(pde_loss, nan=0.0, posinf=1.0e6, neginf=1.0e6)
             optimizer.zero_grad(set_to_none=True); loss.backward(); optimizer.step(); total += loss.item()
-        print(f"Epoch {epoch:03d}/{args.epochs} | train PINO loss={total / len(train_loader):.6e}")
-    torch.save({"model": model.state_dict(), "physics_weight": args.physics_weight}, output / "best_model.pt")
-    print(f"Saved PINO checkpoint to: {output / 'best_model.pt'}")
+            data_total += data_loss.item(); physics_total += pde_loss.item()
+        val = evaluate(val_loader); history["train_total"].append(total / len(train_loader)); history["train_data"].append(data_total / len(train_loader)); history["train_physics"].append(physics_total / len(train_loader)); history["validation_data"].append(val)
+        if val < best: best = val; torch.save({"model": model.state_dict(), "physics_weight": args.physics_weight}, output / "best_model.pt")
+        print(f"Epoch {epoch:03d}/{args.epochs} | data={data_total/len(train_loader):.6e} | physics={physics_total/len(train_loader):.6e} | val={val:.6e}")
+    np.savez(output / "training_history.npz", **history)
+    (output / "metrics.json").write_text(json.dumps({"best_validation_data_loss": best, "physics_weight": args.physics_weight, "test_evaluation": "use shared comparison script"}, indent=2))
+    print(f"Saved PINO checkpoint, losses, and validation metrics to: {output}")
 
 
 if __name__ == "__main__":
