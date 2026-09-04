@@ -66,6 +66,10 @@ def main():
     coords = torch.stack(torch.meshgrid(torch.as_tensor(data["y"], device=device), torch.as_tensor(data["x"], device=device), indexing="ij"), dim=0).float() * 2 - 1
     mask = torch.stack((torch.as_tensor(~data["solid_mask"], device=device), torch.as_tensor(data["surface_mask"], device=device), torch.as_tensor(data["surface_mask"], device=device))).float()
     stats = (torch.as_tensor(data["field_mean"], device=device), torch.as_tensor(data["field_std"], device=device))
+    parameter_mean = torch.as_tensor(data["parameter_mean"], device=device)
+    parameter_std = torch.as_tensor(data["parameter_std"], device=device)
+    time_mean = torch.as_tensor(data["time_mean"], device=device)
+    time_std = torch.as_tensor(data["time_std"], device=device)
     model = TemporalFourierOperator().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     output = Path(args.output_dir); output.mkdir(parents=True, exist_ok=True)
@@ -75,7 +79,7 @@ def main():
             parameters, time, phase, target = parameters.to(device), time.to(device), phase.to(device), target.to(device)
             pred = model(parameters, time, coords)
             data_loss = ((pred - target).square() * mask[None, None]).mean()
-            pde_loss = physics_loss(pred, parameters * torch.as_tensor(data["parameter_std"], device=device) + torch.as_tensor(data["parameter_mean"], device=device), time * data["time_std"] + data["time_mean"], phase, mask, stats, float(data["x"][1] - data["x"][0]), float(data["y"][1] - data["y"][0]))
+            pde_loss = physics_loss(pred, parameters * parameter_std + parameter_mean, time * time_std + time_mean, phase, mask, stats, float(data["x"][1] - data["x"][0]), float(data["y"][1] - data["y"][0]))
             loss = data_loss + args.physics_weight * pde_loss
             optimizer.zero_grad(set_to_none=True); loss.backward(); optimizer.step(); total += loss.item()
         print(f"Epoch {epoch:03d}/{args.epochs} | train PINO loss={total / len(train_loader):.6e}")
