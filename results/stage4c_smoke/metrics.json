@@ -1,0 +1,14 @@
+{
+  "best_validation_loss": 79.42936859130859,
+  "test_loss": 79.00092018975153,
+  "test_mae_normalized": 60.53013462490506,
+  "train_trajectories": 45,
+  "validation_trajectories": 10,
+  "test_trajectories": 9,
+  "grid": [
+    60,
+    80
+  ],
+  "epochs": 2,
+  "device": "Tesla T4"
+}

@@ -1,0 +1,15 @@
+{
+  "temporal_operator": {
+    "concentration_mae": 89.69053649902344,
+    "coverage_mae": 54.96583557128906,
+    "thickness_mae": 1.7830240726470947,
+    "overall_mae": 48.813133239746094,
+    "test_loss": 141.23249520195856
+  },
+  "temporal_pino": {
+    "concentration_mae": 89.80487060546875,
+    "coverage_mae": 50.09821701049805,
+    "thickness_mae": 1.1425472497940063,
+    "overall_mae": 47.01521301269531
+  }
+}
