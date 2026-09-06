@@ -1,6 +1,7 @@
-numpy
-scipy
-matplotlib
-pandas
-pyyaml
-torch
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7
+pandas>=2.0
+pyyaml>=6.0
+# Install PyTorch separately when a CUDA wheel matching the host is required.
+torch>=2.1
