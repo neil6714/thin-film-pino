@@ -6,7 +6,13 @@ import numpy as np
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--input", required=True); ap.add_argument("--output", default="results/stage4_validation"); args = ap.parse_args()
     d = np.load(args.input, allow_pickle=False); out = Path(args.output); out.mkdir(parents=True, exist_ok=True); checks = {}
-    fields = [d["concentration"], d["surface_coverage"], d["film_thickness"]]
+    raw_fields = [d["concentration"], d["surface_coverage"], d["film_thickness"]]
+    if "field_mean" in d and "field_std" in d:
+        fields = [x * s + m for x, m, s in zip(raw_fields, d["field_mean"], d["field_std"])]
+        checks["fields_denormalized_for_physics_checks"] = True
+    else:
+        fields = raw_fields
+        checks["fields_denormalized_for_physics_checks"] = False
     checks["finite"] = all(bool(np.isfinite(x).all()) for x in fields)
     checks["concentration_nonnegative"] = bool((fields[0] >= 0).all())
     checks["coverage_bounded"] = bool(((fields[1] >= -1e-6) & (fields[1] <= 1 + 1e-6)).all())
