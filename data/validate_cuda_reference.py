@@ -25,7 +25,7 @@ def main():
             fast.C.zero_()
         _, theta, h=fast.snapshot(); theta=theta[0]; h=h[0]
     except Exception as exc: raise RuntimeError('CUDA comparison requires a working CUDA runtime') from exc
-    ref_theta=zoom(ref_theta,(59/119,79/159),order=1); ref_h=zoom(ref_h,(59/119,79/159),order=1); err_t=np.abs(ref_theta-theta); err_h=np.abs(ref_h-h)
+    ref_theta=zoom(ref_theta,(60/120,80/160),order=1); ref_h=zoom(ref_h,(60/120,80/160),order=1); err_t=np.abs(ref_theta-theta); err_h=np.abs(ref_h-h)
     metrics={'surface_coverage_mae':float(err_t.mean()),'surface_coverage_rmse':float(np.sqrt((err_t**2).mean())),'film_thickness_mae':float(err_h.mean()),'film_thickness_rmse':float(np.sqrt((err_h**2).mean())),'reference_grid':[120,160],'cuda_grid':[60,80],'parameters':p.tolist()}
     out=Path(args.output); out.mkdir(parents=True,exist_ok=True); (out/'reference_vs_cuda.json').write_text(json.dumps(metrics,indent=2))
     fig,ax=plt.subplots(2,3,figsize=(12,7));
