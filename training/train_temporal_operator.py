@@ -98,36 +98,41 @@ def make_loader(data, indices, batch_size, shuffle):
 
 
 def loss_and_metrics(prediction, target, mask):
-    expanded_mask = mask[None, None]
+    if prediction.shape != target.shape:
+        raise ValueError(f"prediction and target shapes differ: {prediction.shape} vs {target.shape}")
+    expanded_mask = mask.to(device=prediction.device, dtype=prediction.dtype)
+    while expanded_mask.ndim < prediction.ndim:
+        expanded_mask = expanded_mask.unsqueeze(0)
+    expanded_mask = expanded_mask.expand_as(prediction)
     squared = (prediction - target).square()
     absolute = (prediction - target).abs()
     denominator = expanded_mask.sum().clamp_min(1.0)
     loss = (squared * expanded_mask).sum() / denominator
     mae = (absolute * expanded_mask).sum() / denominator
-    return loss, mae
+    return loss, mae, denominator
 
 
 def run_epoch(model, loader, optimizer, coordinates, mask, device, train):
     model.train(train)
     total_loss = 0.0
     total_mae = 0.0
-    total_count = 0
+    total_valid = 0.0
     for parameters, time, target in loader:
         parameters = parameters.to(device, non_blocking=True)
         time = time.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
         with torch.set_grad_enabled(train):
             prediction = model(parameters, time, coordinates)
-            loss, mae = loss_and_metrics(prediction, target, mask)
+            loss, mae, valid = loss_and_metrics(prediction, target, mask)
             if train:
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 optimizer.step()
-        batch_size = parameters.shape[0]
-        total_loss += loss.item() * batch_size
-        total_mae += mae.item() * batch_size
-        total_count += batch_size
-    return total_loss / total_count, total_mae / total_count
+        valid_count = valid.item()
+        total_loss += loss.item() * valid_count
+        total_mae += mae.item() * valid_count
+        total_valid += valid_count
+    return total_loss / max(total_valid, 1.0), total_mae / max(total_valid, 1.0)
 
 
 def main():
