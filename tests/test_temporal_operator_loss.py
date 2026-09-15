@@ -1,4 +1,8 @@
 """Deterministic smoke test for Stage 4C masked loss aggregation."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import torch
 from training.train_temporal_operator import loss_and_metrics
 
