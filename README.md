@@ -1,48 +1,154 @@
-# thin-film-pino
+# Physics-Informed Neural Operator for Atomic Layer Deposition
 
-Physics-informed neural operators for transient Atomic Layer Deposition (ALD).
+A research framework for simulating Atomic Layer Deposition (ALD) and developing neural-operator surrogates for thin-film deposition.
 
-## Installation
+## Overview
 
-Create a virtual environment and install the scientific dependencies:
+The project follows:
 
-```bash
-python -m venv .venv
-# Linux/macOS: source .venv/bin/activate
-# Windows: .venv\\Scripts\\activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+**Physics Simulator → Dataset Generation → ML Baselines → FNO → PINO → Transient PDE-PINO**
+
+The goal is to learn spatial and temporal ALD dynamics while maintaining consistency with the underlying deposition physics.
+
+## Physics Model
+
+The simulator models:
+
+- Precursor diffusion
+- Adsorption/desorption
+- Surface reaction
+- Film growth
+- Cyclic ALD processing
+
+Primary fields:
+
+- Precursor concentration `C`
+- Surface coverage `θ`
+- Film thickness `h`
+
+The reference implementation is:
+
+```text
+physics/simulator.py
 ```
 
-For CUDA training, install the PyTorch wheel recommended for the target CUDA
-version from the [official PyTorch selector](https://pytorch.org/get-started/locally/),
-then verify with `python -c "import torch; print(torch.cuda.is_available())"`.
-CPU execution is supported for the reference simulator and static workflows;
-the fast transient and temporal training scripts require CUDA for practical runtimes.
+## Project Stages
 
-## Workflow
+### Stage 1 — Physics Simulator
 
-1. Generate or inspect the validated static ALD data with the scripts in `data/`.
-2. Generate transient trajectories with `python -m data.generate_transient_dataset_fast`.
-3. Prepare normalized, trajectory-level splits with `python -m data.prepare_temporal_dataset`.
-4. Validate the prepared data with `python -m data.validate_transient_dataset`.
-5. Train the supervised temporal operator with `training.train_temporal_operator`.
-6. Train the experimental PDE-informed temporal PINO with `training.train_temporal_pino`.
-7. Compare checkpoints with `python -m results.compare_all_models` and plot losses with
-   `python -m results.plot_all_losses`.
+Validated 2D cyclic ALD simulator with pulse, purge, reaction, and film-growth dynamics.
 
-All commands accept explicit input/output paths; no environment-specific paths are required.
+Validated through:
 
-## Data and checkpoints
+- Cycle stability
+- Pulse-time sweeps
+- Kinetic sweeps
+- Conformality
+- GPC behavior
 
-Generated `.npz` datasets and `.pt`/`.pth` checkpoints are intentionally excluded
-from Git because they can be hundreds of megabytes. Keep them in Google Drive or
-another artifact store and record the generation command, grid, sample count, seed,
-and commit SHA alongside any reported metrics. JSON, CSV, Markdown, and PNG reports
-remain suitable for version control.
+### Stage 2 — Dataset Generation
 
-## Scientific status
+Generated a 2,000-sample GPU-accelerated ALD dataset on a `120 × 160` grid.
 
-Stage 1–3 results are historical validated baselines with documented caveats.
-Stage 4 transient/PINO results remain experimental until the reference-vs-CUDA
-physics check, phase-aware residual audit, and common held-out evaluation pass.
+Outputs include:
+
+- Concentration
+- Surface coverage
+- Film thickness
+- GPC
+- Conformality
+- Thickness metrics
+
+GPU results were validated against the CPU reference solver with maximum relative error of approximately `1.7e-5`.
+
+### Stage 3 — Static ML
+
+Models evaluated:
+
+```text
+MLP → FNO → Physics-Constrained FNO
+```
+
+The MLP achieved mean `R² ≈ 0.99946` on scalar deposition metrics.
+
+The static FNO achieved:
+
+```text
+Coverage R²  ≈ 0.9968
+Thickness R² ≈ 0.9974
+```
+
+Controlled ablations showed that simple static physics regularization did not provide a meaningful improvement over the baseline FNO.
+
+### Stage 4 — Transient Modeling
+
+The project is moving from final-state prediction to:
+
+```text
+(parameters, time) → C(x,y,t), θ(x,y,t), h(x,y,t)
+```
+
+Current components:
+
+```text
+data/generate_transient_dataset.py
+data/generate_transient_dataset_fast.py
+physics/transient_cuda.py
+physics/batched_transient_cuda.py
+training/train_temporal_operator.py
+training/train_temporal_pino.py
+```
+
+Stage 4C uses a time-conditioned spatial FNO.
+
+Stage 4D introduces PDE residuals for transient ALD physics.
+
+## Current Focus
+
+The main remaining work is to:
+
+1. Correct Stage 4 evaluation and metric aggregation.
+2. Validate transient CUDA simulations against the reference solver.
+3. Make PDE residuals phase-aware.
+4. Match spatial derivatives to the simulator geometry.
+5. Establish a shared held-out test evaluation.
+6. Compare Temporal FNO vs PDE-PINO on accuracy, physics consistency, generalization, and inference speed.
+
+## Repository Structure
+
+```text
+thin-film-pino/
+├── data/
+├── physics/
+├── training/
+├── evaluation/
+├── tests/
+├── results/
+├── requirements.txt
+└── README.md
+```
+
+Large datasets and model checkpoints are stored externally and are not committed to GitHub.
+
+## Reproducibility
+
+The project preserves intermediate and failed approaches rather than deleting them. Historical results are retained for comparison and debugging.
+
+Final experiments should report:
+
+- MAE
+- RMSE
+- R²
+- PDE residuals
+- Physical constraints
+- Generalization performance
+- Simulation vs neural-operator inference time
+
+## Future Work
+
+- Fully validated transient PDE-PINO
+- Improved geometry handling
+- Unseen-parameter generalization
+- Inverse ALD process design
+- Faster surrogate-based optimization
+- More realistic ALD chemistry and geometries
