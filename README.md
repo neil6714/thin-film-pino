@@ -21,21 +21,27 @@ This framework develops:
 
 The coupled continuum transport-reaction system in a 2D domain $\Omega = [0, L_x] \times [0, L_y]$ is formulated as:
 
-1. **Precursor Vapor Transport (Gas Domain $\Omega_{\text{gas}}$)**:
-   $$\frac{\partial C}{\partial t} = D \nabla^2 C - R_{\text{ads}}(x, y, t)$$
-   where $C(x, y, t)$ is the precursor molar concentration ($\text{mol}/\text{m}^3$), $D$ is the diffusion coefficient ($\text{m}^2/\text{s}$), and $R_{\text{ads}}$ is the volumetric surface sink rate localized to surface boundary cells.
+**1. Precursor Vapor Transport (Gas Domain $\Omega_{\text{gas}}$)**:
 
-2. **Surface Coverage Dynamics (Surface Boundary $\Gamma_{\text{surf}}$)**:
-   $$\frac{\partial \theta}{\partial t} = R_{\text{ads}} - R_{\text{des}} - R_{\text{rxn}}$$
-   governed by Langmuir self-limiting kinetics:
-   $$R_{\text{ads}} = k_{\text{ads}} C (1 - \theta)$$
-   $$R_{\text{des}} = k_{\text{des}} \theta$$
-   $$R_{\text{rxn}} = k_{\text{rxn}} \theta$$
-   where $\theta(x, y, t) \in [0.0, 1.0]$ represents the fractional coverage of chemisorbed precursor species, $k_{\text{ads}}$ is the first-order adsorption rate constant ($\text{s}^{-1}$), $k_{\text{des}}$ is the thermal desorption rate constant ($\text{s}^{-1}$), and $k_{\text{rxn}}$ is the co-reactant reaction rate constant ($\text{s}^{-1}$).
+$$\frac{\partial C}{\partial t} = D \nabla^2 C - R_{\text{ads}}(x, y, t)$$
 
-3. **Film Thickness Evolution ($\Gamma_{\text{surf}}$)**:
-   $$\frac{\partial h}{\partial t} = k_{\text{growth}} R_{\text{rxn}} = k_{\text{growth}} k_{\text{rxn}} \theta$$
-   where $h(x, y, t)$ is the accumulated deposited film thickness ($\text{m}$) and $k_{\text{growth}}$ is the growth-per-cycle conversion factor ($\text{m}/\text{cycle}$).
+where $C(x, y, t)$ is the precursor molar concentration ($\text{mol}/\text{m}^3$), $D$ is the diffusion coefficient ($\text{m}^2/\text{s}$), and $R_{\text{ads}}$ is the volumetric surface sink rate localized to surface boundary cells.
+
+**2. Surface Coverage Dynamics (Surface Boundary $\Gamma_{\text{surf}}$)**:
+
+$$\frac{\partial \theta}{\partial t} = R_{\text{ads}} - R_{\text{des}} - R_{\text{rxn}}$$
+
+governed by Langmuir self-limiting kinetics:
+
+$$R_{\text{ads}} = k_{\text{ads}} C (1 - \theta), \quad R_{\text{des}} = k_{\text{des}} \theta, \quad R_{\text{rxn}} = k_{\text{rxn}} \theta$$
+
+where $\theta(x, y, t) \in [0.0, 1.0]$ represents the fractional coverage of chemisorbed precursor species, $k_{\text{ads}}$ is the first-order adsorption rate constant ($\text{s}^{-1}$), $k_{\text{des}}$ is the thermal desorption rate constant ($\text{s}^{-1}$), and $k_{\text{rxn}}$ is the co-reactant reaction rate constant ($\text{s}^{-1}$).
+
+**3. Film Thickness Evolution ($\Gamma_{\text{surf}}$)**:
+
+$$\frac{\partial h}{\partial t} = k_{\text{growth}} R_{\text{rxn}} = k_{\text{growth}} k_{\text{rxn}} \theta$$
+
+where $h(x, y, t)$ is the accumulated deposited film thickness ($\text{m}$) and $k_{\text{growth}}$ is the growth-per-cycle conversion factor ($\text{m}/\text{cycle}$).
 
 ### 2.2 Boundary & Initial Conditions
 
@@ -100,16 +106,23 @@ $$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{data}} + \lambda_{\text{physic
 
 where the PDE residual penalty $\mathcal{L}_{\text{PDE}}$ evaluates three coupled physical components:
 
-1. **Precursor Transport Residual** (evaluated over active gas cells $\Omega_{\text{gas}}$):
-   $$\mathcal{R}_C = \frac{\partial C}{\partial t} - D \nabla^2 C + \delta_{\text{pulse}} R_{\text{ads}}$$
+**1. Precursor Transport Residual** (evaluated over active gas cells $\Omega_{\text{gas}}$):
 
-2. **Surface Coverage Residual** (evaluated over surface cells $\Gamma_{\text{surf}}$):
-   $$\mathcal{R}_\theta = \frac{\partial \theta}{\partial t} - \delta_{\text{pulse}} (R_{\text{ads}} - R_{\text{des}}) + \delta_{\text{rxn}} R_{\text{rxn}}$$
+$$\mathcal{R}_C = \frac{\partial C}{\partial t} - D \nabla^2 C + \delta_{\text{pulse}} R_{\text{ads}}$$
 
-3. **Film Growth Residual** (evaluated over surface cells $\Gamma_{\text{surf}}$):
-   $$\mathcal{R}_h = \frac{\partial h}{\partial t} - \delta_{\text{rxn}} k_{\text{growth}} R_{\text{rxn}}$$
+**2. Surface Coverage Residual** (evaluated over surface cells $\Gamma_{\text{surf}}$):
 
-Here, $\delta_{\text{pulse}} \in \{0, 1\}$ and $\delta_{\text{rxn}} \in \{0, 1\}$ denote phase activation indicators for the precursor dose and co-reactant reaction stages, respectively.
+$$\mathcal{R}_\theta = \frac{\partial \theta}{\partial t} - \delta_{\text{pulse}} (R_{\text{ads}} - R_{\text{des}}) + \delta_{\text{rxn}} R_{\text{rxn}}$$
+
+**3. Film Growth Residual** (evaluated over surface cells $\Gamma_{\text{surf}}$):
+
+$$\mathcal{R}_h = \frac{\partial h}{\partial t} - \delta_{\text{rxn}} k_{\text{growth}} R_{\text{rxn}}$$
+
+where the stage indicators satisfy:
+
+$$\delta_{\text{pulse}} \in \{0, 1\}, \quad \delta_{\text{rxn}} \in \{0, 1\}$$
+
+activating the precursor dose and co-reactant reaction stages, respectively.
 
 All differential terms are computed using physical coordinates ($dx$, $dy$, $dt$) and unscaled physical values ($C$, $\theta$, $h$) rather than normalized tensor indices.
 
