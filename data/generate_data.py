@@ -1,20 +1,34 @@
-import os
+"""Synthetic parameter-sweep dataset generator for steady-state ALD deposition profiles."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import sys
+from typing import Any, Dict
+
 import numpy as np
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from physics.simulator import ThinFilmDepositionSimulator
 
 
-def sample_parameters(rng):
+def sample_parameters(rng: np.random.Generator) -> Dict[str, float]:
+    """Sample kinetic and transport parameters from uniform prior intervals."""
     return {
-        "diffusivity": rng.uniform(1.0e-3, 4.0e-3),
-        "k_ads": rng.uniform(0.5, 1.5),
-        "k_des": rng.uniform(0.02, 0.10),
-        "k_rxn": rng.uniform(0.2, 0.8),
-        "k_growth": rng.uniform(0.01, 0.04),
+        "diffusivity": float(rng.uniform(1.0e-3, 4.0e-3)),
+        "k_ads": float(rng.uniform(0.5, 1.5)),
+        "k_des": float(rng.uniform(0.02, 0.10)),
+        "k_rxn": float(rng.uniform(0.2, 0.8)),
+        "k_growth": float(rng.uniform(0.01, 0.04)),
     }
 
 
-def run_simulation(parameters):
+def run_simulation(parameters: Dict[str, float]) -> Dict[str, Any]:
+    """Instantiate and execute a single continuum simulation instance."""
     simulator = ThinFilmDepositionSimulator(
         diffusivity=parameters["diffusivity"],
         k_ads=parameters["k_ads"],
@@ -25,13 +39,9 @@ def run_simulation(parameters):
 
     simulator.run()
 
-    top_thickness = simulator.history["top_thickness"][-1]
-    bottom_thickness = simulator.history["bottom_thickness"][-1]
-
-    if top_thickness > 0.0:
-        conformality = bottom_thickness / top_thickness
-    else:
-        conformality = 0.0
+    top_thickness = float(simulator.history["top_thickness"][-1])
+    bottom_thickness = float(simulator.history["bottom_thickness"][-1])
+    conformality = bottom_thickness / top_thickness if top_thickness > 0.0 else 0.0
 
     return {
         "concentration": simulator.C.copy(),
@@ -43,7 +53,10 @@ def run_simulation(parameters):
     }
 
 
-def generate_dataset(num_samples=100, seed=42):
+def generate_dataset(
+    num_samples: int = 100, seed: int = 42, output_path: str = "data/deposition_dataset.npz"
+) -> Path:
+    """Generate and serialize an ensemble of steady-state deposition profiles."""
     rng = np.random.default_rng(seed)
 
     parameters = []
@@ -53,6 +66,8 @@ def generate_dataset(num_samples=100, seed=42):
     top_thicknesses = []
     bottom_thicknesses = []
     conformalities = []
+
+    print(f"Generating deposition dataset: {num_samples} samples, seed={seed}")
 
     for index in range(num_samples):
         parameter_set = sample_parameters(rng)
@@ -73,15 +88,14 @@ def generate_dataset(num_samples=100, seed=42):
         bottom_thicknesses.append(result["bottom_thickness"])
         conformalities.append(result["conformality"])
 
-        print(
-            f"[{index + 1:03d}/{num_samples}] "
-            f"conformality={result['conformality']:.4f}"
-        )
+        if (index + 1) % 10 == 0 or index == num_samples - 1:
+            print(f"[{index + 1:03d}/{num_samples}] conformality={result['conformality']:.4f}")
 
-    os.makedirs("data", exist_ok=True)
+    target_file = Path(output_path).resolve()
+    target_file.parent.mkdir(parents=True, exist_ok=True)
 
     np.savez_compressed(
-        "data/deposition_dataset.npz",
+        target_file,
         parameters=np.asarray(parameters, dtype=np.float64),
         concentration=np.asarray(concentrations, dtype=np.float64),
         surface_coverage=np.asarray(surface_coverages, dtype=np.float64),
@@ -91,9 +105,20 @@ def generate_dataset(num_samples=100, seed=42):
         conformality=np.asarray(conformalities, dtype=np.float64),
     )
 
-    print("\nDataset generation complete.")
-    print("Saved to: data/deposition_dataset.npz")
+    print(f"\nDataset generation completed successfully.")
+    print(f"Archived dataset saved to: {target_file}")
+    return target_file
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate ALD steady-state deposition dataset.")
+    parser.add_argument("--num-samples", type=int, default=100, help="Number of simulation samples.")
+    parser.add_argument("--seed", type=int, default=42, help="Random number generator seed.")
+    parser.add_argument("--output", default="data/deposition_dataset.npz", help="Output .npz archive path.")
+    args = parser.parse_args()
+
+    generate_dataset(num_samples=args.num_samples, seed=args.seed, output_path=args.output)
 
 
 if __name__ == "__main__":
-    generate_dataset()
+    main()

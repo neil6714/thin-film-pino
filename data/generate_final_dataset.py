@@ -1,14 +1,19 @@
-import os
+"""Dataset generator for steady-state ALD deposition profiles and conformality metrics."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import sys
+from typing import Optional, Sequence, Tuple
 
 import numpy as np
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from physics.simulator import ThinFilmDepositionSimulator
-
-
-SEED = 42
-NUM_SAMPLES = 2000
-NUM_CYCLES = 10
-OUTPUT_FILE = "data/final_dataset.npz"
 
 PARAMETER_RANGES = {
     "diffusivity": (1.0e-3, 8.0e-3),
@@ -22,27 +27,34 @@ PARAMETER_RANGES = {
 }
 
 
-def sample_pulse_time(rng):
+def sample_pulse_time(rng: np.random.Generator) -> float:
+    """Sample precursor pulse duration with bimodal distribution."""
     if rng.random() < 0.85:
-        return rng.uniform(10.0, 60.0)
-
-    return rng.uniform(60.0, 100.0)
-
-
-def sample_parameters(rng):
-    return np.array([
-        rng.uniform(*PARAMETER_RANGES["diffusivity"]),
-        rng.uniform(*PARAMETER_RANGES["k_ads"]),
-        rng.uniform(*PARAMETER_RANGES["k_des"]),
-        rng.uniform(*PARAMETER_RANGES["k_rxn"]),
-        PARAMETER_RANGES["k_growth"][0],
-        sample_pulse_time(rng),
-        PARAMETER_RANGES["purge_time"][0],
-        PARAMETER_RANGES["reaction_time"][0],
-    ])
+        return float(rng.uniform(10.0, 60.0))
+    return float(rng.uniform(60.0, 100.0))
 
 
-def run_sample(parameters):
+def sample_parameters(rng: np.random.Generator) -> np.ndarray:
+    """Sample a single physical parameter vector from prescribed parameter bounds."""
+    return np.array(
+        [
+            rng.uniform(*PARAMETER_RANGES["diffusivity"]),
+            rng.uniform(*PARAMETER_RANGES["k_ads"]),
+            rng.uniform(*PARAMETER_RANGES["k_des"]),
+            rng.uniform(*PARAMETER_RANGES["k_rxn"]),
+            PARAMETER_RANGES["k_growth"][0],
+            sample_pulse_time(rng),
+            PARAMETER_RANGES["purge_time"][0],
+            PARAMETER_RANGES["reaction_time"][0],
+        ],
+        dtype=np.float64,
+    )
+
+
+def run_sample(
+    parameters: Sequence[float], num_cycles: int = 10
+) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, float, float, float, float]]:
+    """Execute a single simulation instance and validate physical invariants."""
     (
         diffusivity,
         k_ads,
@@ -63,7 +75,7 @@ def run_sample(parameters):
         pulse_time=pulse_time,
         purge_time=purge_time,
         reaction_time=reaction_time,
-        num_cycles=NUM_CYCLES,
+        num_cycles=num_cycles,
     )
 
     simulator.run()
@@ -72,10 +84,10 @@ def run_sample(parameters):
     surface_coverage = simulator.theta.copy()
     film_thickness = simulator.h.copy()
 
-    gpc = simulator.history["gpc"][-1]
-    top_thickness = simulator.history["top_thickness"][-1]
-    bottom_thickness = simulator.history["bottom_thickness"][-1]
-    conformality = simulator.history["conformality"][-1]
+    gpc = float(simulator.history["gpc"][-1])
+    top_thickness = float(simulator.history["top_thickness"][-1])
+    bottom_thickness = float(simulator.history["bottom_thickness"][-1])
+    conformality = float(simulator.history["conformality"][-1])
 
     valid = (
         np.all(np.isfinite(concentration))
@@ -109,14 +121,22 @@ def run_sample(parameters):
     )
 
 
-def main():
-    rng = np.random.default_rng(SEED)
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Generate steady-state ALD deposition dataset across physical parameter space."
+    )
+    parser.add_argument("--num-samples", type=int, default=2000, help="Target number of accepted simulation samples.")
+    parser.add_argument("--num-cycles", type=int, default=10, help="Number of ALD cycles per sample.")
+    parser.add_argument("--seed", type=int, default=42, help="Random number generator seed.")
+    parser.add_argument("--output", default="data/final_dataset.npz", help="Path to destination .npz archive.")
+    args = parser.parse_args()
+
+    rng = np.random.default_rng(args.seed)
 
     parameters = []
     concentrations = []
     surface_coverages = []
     film_thicknesses = []
-
     gpc = []
     top_thickness = []
     bottom_thickness = []
@@ -125,20 +145,16 @@ def main():
     accepted = 0
     attempts = 0
 
-    print("Generating final ALD dataset...")
-    print(f"Target samples: {NUM_SAMPLES}")
-    print(f"ALD cycles: {NUM_CYCLES}")
+    print("Executing final ALD dataset generation...")
+    print(f"Target sample count: {args.num_samples}")
+    print(f"Cycles per sample: {args.num_cycles}")
 
-    while accepted < NUM_SAMPLES:
+    while accepted < args.num_samples:
         attempts += 1
-
         sample = sample_parameters(rng)
-        result = run_sample(sample)
+        result = run_sample(sample, num_cycles=args.num_cycles)
 
         if result is None:
-            print(
-                f"Rejected sample at attempt {attempts}"
-            )
             continue
 
         (
@@ -151,55 +167,39 @@ def main():
             sample_conformality,
         ) = result
 
-        parameters.append(sample_parameters)
+        parameters.append(sample)
         concentrations.append(concentration)
         surface_coverages.append(surface_coverage)
         film_thicknesses.append(film_thickness)
-
         gpc.append(sample_gpc)
         top_thickness.append(sample_top)
         bottom_thickness.append(sample_bottom)
         conformality.append(sample_conformality)
 
         accepted += 1
-
         if accepted % 100 == 0:
-            print(
-                f"Generated {accepted}/{NUM_SAMPLES} "
-                f"samples"
-            )
+            print(f"Completed {accepted}/{args.num_samples} samples.")
 
-    os.makedirs(
-        os.path.dirname(OUTPUT_FILE),
-        exist_ok=True,
-    )
+    out_path = Path(args.output).resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
     np.savez_compressed(
-        OUTPUT_FILE,
-        parameters=np.asarray(parameters),
-        concentration=np.asarray(concentrations),
-        surface_coverage=np.asarray(
-            surface_coverages
-        ),
-        film_thickness=np.asarray(
-            film_thicknesses
-        ),
-        gpc=np.asarray(gpc),
-        top_thickness=np.asarray(top_thickness),
-        bottom_thickness=np.asarray(
-            bottom_thickness
-        ),
-        conformality=np.asarray(
-            conformality
-        ),
-        seed=SEED,
-        num_cycles=NUM_CYCLES,
+        out_path,
+        parameters=np.asarray(parameters, dtype=np.float32),
+        concentration=np.asarray(concentrations, dtype=np.float32),
+        surface_coverage=np.asarray(surface_coverages, dtype=np.float32),
+        film_thickness=np.asarray(film_thicknesses, dtype=np.float32),
+        gpc=np.asarray(gpc, dtype=np.float32),
+        top_thickness=np.asarray(top_thickness, dtype=np.float32),
+        bottom_thickness=np.asarray(bottom_thickness, dtype=np.float32),
+        conformality=np.asarray(conformality, dtype=np.float32),
+        seed=args.seed,
+        num_cycles=args.num_cycles,
     )
 
-    print("\nDataset generation complete.")
-    print(f"Samples generated: {accepted}")
-    print(f"Total attempts: {attempts}")
-    print(f"Saved to: {OUTPUT_FILE}")
+    print("\nDataset generation completed successfully.")
+    print(f"Accepted samples: {accepted} (total attempts: {attempts})")
+    print(f"Saved to: {out_path}")
 
 
 if __name__ == "__main__":

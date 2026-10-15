@@ -1,9 +1,14 @@
 import argparse
 import json
 from pathlib import Path
+import sys
 
 import numpy as np
 import torch
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from physics.transient_cuda import TransientALDCudaSimulator
 
@@ -256,11 +261,12 @@ def main():
     trajectories = []
     cycle_metrics = []
 
+    device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
     print("Generating transient ALD dataset...")
     print(f"Target trajectories: {args.num_samples}")
     print(f"ALD cycles per trajectory: {args.num_cycles}")
     print(f"Snapshots per phase: {args.snapshots_per_phase}")
-    print(f"CUDA device: {torch.cuda.get_device_name(0)}")
+    print(f"Execution device: {device_name}")
 
     while len(trajectories) < args.num_samples:
         sample = sample_parameters(rng)
