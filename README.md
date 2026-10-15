@@ -86,7 +86,11 @@ The 2D Fourier layer parameterizes integral kernel operators directly in the fre
 
 $$(\mathcal{K}(v))(x) = \mathcal{F}^{-1}\left(R_\phi \cdot (\mathcal{F} v)\right)(x)$$
 
-where $\mathcal{F}$ and $\mathcal{F}^{-1}$ denote the 2D Real Fast Fourier Transform (`torch.fft.rfft2`) and its inverse (`torch.fft.irfft2`), and $R_\phi \in \mathbb{C}^{\text{channels} \times \text{channels} \times k_{\max, y} \times k_{\max, x}}$ represents learnable complex frequency weights truncated at mode cutoff $k_{\max} = 12$.
+where $\mathcal{F}$ and $\mathcal{F}^{-1}$ denote the 2D Real Fast Fourier Transform (`torch.fft.rfft2`) and its inverse (`torch.fft.irfft2`), with learnable complex frequency weight tensor:
+
+$$R_\phi \in \mathbb{C}^{\text{channels} \times \text{channels} \times k_{\max, y} \times k_{\max, x}}$$
+
+truncated at spatial frequency mode cutoff $k_{\max} = 12$.
 
 ### 3.2 Physics-Informed Residual Formulation
 
@@ -94,10 +98,18 @@ The total optimization objective balances masked data loss against phase-aware c
 
 $$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{data}} + \lambda_{\text{physics}} \mathcal{L}_{\text{PDE}}$$
 
-where the PDE residual penalty $\mathcal{L}_{\text{PDE}}$ evaluates:
-- **Precursor transport residual**: $\mathcal{R}_C = \frac{\partial C}{\partial t} - D \nabla^2 C + \delta_{\text{pulse}} R_{\text{ads}}$ over active gas cells $\Omega_{\text{gas}}$.
-- **Coverage residual**: $\mathcal{R}_\theta = \frac{\partial \theta}{\partial t} - \delta_{\text{pulse}} (R_{\text{ads}} - R_{\text{des}}) + \delta_{\text{rxn}} R_{\text{rxn}}$ over surface cells $\Gamma_{\text{surf}}$.
-- **Film growth residual**: $\mathcal{R}_h = \frac{\partial h}{\partial t} - \delta_{\text{rxn}} k_{\text{growth}} R_{\text{rxn}}$ over surface cells $\Gamma_{\text{surf}}$.
+where the PDE residual penalty $\mathcal{L}_{\text{PDE}}$ evaluates three coupled physical components:
+
+1. **Precursor Transport Residual** (evaluated over active gas cells $\Omega_{\text{gas}}$):
+   $$\mathcal{R}_C = \frac{\partial C}{\partial t} - D \nabla^2 C + \delta_{\text{pulse}} R_{\text{ads}}$$
+
+2. **Surface Coverage Residual** (evaluated over surface cells $\Gamma_{\text{surf}}$):
+   $$\mathcal{R}_\theta = \frac{\partial \theta}{\partial t} - \delta_{\text{pulse}} (R_{\text{ads}} - R_{\text{des}}) + \delta_{\text{rxn}} R_{\text{rxn}}$$
+
+3. **Film Growth Residual** (evaluated over surface cells $\Gamma_{\text{surf}}$):
+   $$\mathcal{R}_h = \frac{\partial h}{\partial t} - \delta_{\text{rxn}} k_{\text{growth}} R_{\text{rxn}}$$
+
+Here, $\delta_{\text{pulse}} \in \{0, 1\}$ and $\delta_{\text{rxn}} \in \{0, 1\}$ denote phase activation indicators for the precursor dose and co-reactant reaction stages, respectively.
 
 All differential terms are computed using physical coordinates ($dx$, $dy$, $dt$) and unscaled physical values ($C$, $\theta$, $h$) rather than normalized tensor indices.
 
