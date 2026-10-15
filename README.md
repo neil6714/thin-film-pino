@@ -63,7 +63,7 @@ Guaranteed stability requires $\Delta t < \frac{\min(\Delta x, \Delta y)^2}{4 D_
 Physical Parameters [p] (8-dim) ──┐
 Time Coordinate t (1-dim)       ──┼──► Spatial Broadcast & Concat ──► Lifting Conv2d (11 -> width)
 Normalized Grid (x, y) (2-dim)  ──┘                                           │
-                                                                             ▼
+                                                                              ▼
                                                                 ┌─────────────────────────┐
                                                                 │ 4x FourierBlock         │
                                                                 │  - SpectralConv2d       │
