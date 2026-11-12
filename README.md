@@ -11,7 +11,7 @@ Atomic Layer Deposition (ALD) is a vapor-phase thin-film fabrication technique b
 This framework includes:
 1. **Continuum ALD Simulators**: 2D explicit forward-time central-space (FTCS) finite-difference solvers governed by diffusive von Neumann and reaction kinetic stability limits, with NumPy CPU and vectorized PyTorch GPU/CPU implementations sharing identical geometry and stencil code.
 2. **Temporal Fourier Neural Operators (TFNO)**: Deep operator networks mapping physical process parameters and time coordinates to spatial multi-field states $(\mathbf{p}, t) \mapsto (C, \theta, h)(x, y, t)$.
-3. **Physics-Informed Neural Operators (PINO)**: Operator learning regularized by transient PDE residual penalties evaluated at discrete trajectory snapshots.
+3. **Physics-Informed Neural Operators (PINO)**: Operator learning regularized by penalizing the residual of the governing equations at continuous collocation points.
 
 For the mathematical derivation, scaling, and assumptions, see [Formulation](docs/formulation.md).
 For documented simulator and surrogate limitations, see [Known Limitations](docs/known_limitations.md).
@@ -134,25 +134,27 @@ $$\mathcal{L}_{\text{data}} = \frac{1}{\sum_{c=1}^3 w_c} \sum_{c=1}^3 w_c \frac{
 
 where $|\Omega_c|$ is the active element count for channel $c$. This formulation prevents the dense gas domain (thousands of cells) from drowning out sparse surface coverage and thickness targets (a few hundred boundary cells).
 
-The PINO objective regularizes training with intra-phase PDE residuals:
+The PINO objective regularizes training by penalizing the residual of the governing equations at continuous collocation points:
 
 $$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{data}} + \lambda_{\text{physics}} \mathcal{L}_{\text{PDE}}$$
 
-where finite differences are restricted strictly to snapshots within the same phase to avoid differentiating across discontinuous stage boundaries:
+Continuous time derivatives $\partial u / \partial t$ are computed via automatic differentiation (`torch.autograd.grad`) with respect to normalized continuous time $t_{\text{norm}}$, divided by $\sigma_t$. This enables evaluating residuals at arbitrary continuous collocation times without requiring snapshot labels.
 
-**1. Precursor Transport Residual** (over active gas cells $\Omega_{\text{gas}}$):
+**1. Precursor Transport Residual** (evaluated on active gas cells $\Omega_{\text{gas}}$ during dose phase only):
 
-$$\mathcal{R}_C = \frac{\partial C}{\partial t} - D \nabla^2 C + \delta_{\text{pulse}} R_{\text{ads}}$$
+$$\mathcal{R}_C = \frac{1}{\sigma_C} \left( \frac{\partial C}{\partial t} - D \nabla^2 C + \mathbf{1}_{\Gamma_{\text{surf}}} R_{\text{ads}} \right)$$
 
-**2. Surface Coverage Residual** (over surface cells $\Gamma_{\text{surf}}$):
+where $\nabla^2 C$ uses the masked zero-flux boundary stencil from `physics/stencil.py` with solid cells zeroed.
 
-$$\mathcal{R}_\theta = \frac{\partial \theta}{\partial t} - \delta_{\text{pulse}} (R_{\text{ads}} - R_{\text{des}}) + \delta_{\text{rxn}} R_{\text{rxn}}$$
+**2. Surface Coverage Residual** (evaluated on surface cells $\Gamma_{\text{surf}}$):
 
-**3. Film Growth Residual** (over surface cells $\Gamma_{\text{surf}}$):
+$$\mathcal{R}_\theta = \frac{1}{\sigma_\theta} \left( \frac{\partial \theta}{\partial t} - \delta_{\text{pulse}} (R_{\text{ads}} - R_{\text{des}}) + \delta_{\text{rxn}} R_{\text{rxn}} \right)$$
 
-$$\mathcal{R}_h = \frac{\partial h}{\partial t} - \delta_{\text{rxn}} k_{\text{growth}} R_{\text{rxn}}$$
+**3. Film Growth Residual** (evaluated on surface cells $\Gamma_{\text{surf}}$):
 
-where $\delta_{\text{pulse}}, \delta_{\text{rxn}} \in \{0, 1\}$ indicate precursor dose and co-reactant reaction stages, respectively.
+$$\mathcal{R}_h = \frac{1}{\sigma_h} \left( \frac{\partial h}{\partial t} - \delta_{\text{rxn}} k_{\text{growth}} R_{\text{rxn}} \right)$$
+
+where $\delta_{\text{pulse}}, \delta_{\text{rxn}} \in \{0, 1\}$ indicate precursor dose and co-reactant reaction stages, respectively. Residuals are nondimensionalized and balanced by their respective field standard deviations $\sigma_C, \sigma_\theta, \sigma_h$.
 
 ---
 
@@ -208,6 +210,7 @@ thin-film-pino/
 │   ├── test_data_pipeline.py       # Dataset generation, stratification, and validation tests
 │   ├── test_fno.py                 # Spectral convolution, conditioning, and overfit tests
 │   ├── test_physics.py             # Physics, geometry masks, clamping, and solver parity
+│   ├── test_pino.py                # Continuous autograd, collocation sampling, and golden tests
 │   └── test_temporal_operator_loss.py # Masked reduction unit test
 ├── pyproject.toml                  # Packaging specification and dependencies
 ├── requirements.txt                # Pinned dependency requirements

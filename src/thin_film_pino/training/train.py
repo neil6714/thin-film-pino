@@ -16,11 +16,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from thin_film_pino.models.fno import TemporalFourierOperator
+from thin_film_pino.training.pino import compute_physics_loss
 
 
 def set_seed(seed: int) -> None:
@@ -113,76 +113,6 @@ def parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
         help="Directory to save model checkpoints and logs. Defaults to runs/<model>.",
     )
     return parser.parse_args(args)
-
-
-def laplacian(field: torch.Tensor, dx: float, dy: float) -> torch.Tensor:
-    """Compute 2D spatial discrete Laplacian using replicate-padded central differences."""
-    padded = F.pad(field, (1, 1, 1, 1), mode="replicate")
-    d2_dx2 = (padded[..., 1:-1, 2:] + padded[..., 1:-1, :-2] - 2.0 * field) / (dx**2)
-    d2_dy2 = (padded[..., 2:, 1:-1] + padded[..., :-2, 1:-1] - 2.0 * field) / (dy**2)
-    return d2_dx2 + d2_dy2
-
-
-def physics_loss(
-    pred: torch.Tensor,
-    parameters: torch.Tensor,
-    time: torch.Tensor,
-    phase: torch.Tensor,
-    channel_masks: torch.Tensor,
-    stats: Tuple[torch.Tensor, torch.Tensor],
-    dx: float,
-    dy: float,
-    k_growth: float = 0.02,
-) -> torch.Tensor:
-    """Compute intra-phase PDE residuals for transport, coverage, and thickness evolution."""
-    mean = stats[0][None, None, :, None, None]
-    scale = stats[1][None, None, :, None, None]
-    physical = pred * scale + mean
-    c, theta, thickness = physical.unbind(dim=2)
-
-    # Restrict finite differences strictly to snapshots within the same phase
-    # Avoid taking numerical derivatives across discontinuous phase transitions
-    dt = (time[:, 2:] - time[:, :-2]).clamp_min(1.0e-8)[:, :, None, None]
-    same_phase = (phase[:, :-2] == phase[:, 1:-1]) & (phase[:, 1:-1] == phase[:, 2:])
-    phase_mask = same_phase.float()[:, :, None, None]
-
-    dc_dt = (c[:, 2:] - c[:, :-2]) / dt
-    dtheta_dt = (theta[:, 2:] - theta[:, :-2]) / dt
-    dh_dt = (thickness[:, 2:] - thickness[:, :-2]) / dt
-
-    middle_phase = phase[:, 1:-1]
-    pulse = (middle_phase == 1).float()[:, :, None, None]
-    reaction = (middle_phase == 3).float()[:, :, None, None]
-
-    diffusivity = parameters[:, 0, None, None, None]
-    k_ads = parameters[:, 1, None, None, None]
-    k_des = parameters[:, 2, None, None, None]
-    k_rxn = parameters[:, 3, None, None, None]
-
-    c_mid = c[:, 1:-1]
-    theta_mid = theta[:, 1:-1]
-
-    adsorption = pulse * k_ads * c_mid * (1.0 - theta_mid)
-    desorption = pulse * k_des * theta_mid
-
-    transport = dc_dt - diffusivity * laplacian(c_mid, dx, dy) + adsorption
-    coverage = dtheta_dt - adsorption + desorption + reaction * k_rxn * theta_mid
-    growth = dh_dt - reaction * k_growth * k_rxn * theta_mid
-
-    # Mask over active physical domains and multiply by intra-phase mask
-    res_c = transport.square() * channel_masks[0] * phase_mask
-    res_theta = coverage.square() * channel_masks[1] * phase_mask
-    res_h = growth.square() * channel_masks[2] * phase_mask
-
-    n_c = (channel_masks[0] * phase_mask).sum().clamp_min(1.0)
-    n_theta = (channel_masks[1] * phase_mask).sum().clamp_min(1.0)
-    n_h = (channel_masks[2] * phase_mask).sum().clamp_min(1.0)
-
-    loss_c = res_c.sum() / n_c
-    loss_theta = res_theta.sum() / n_theta
-    loss_h = res_h.sum() / n_h
-
-    return (loss_c + loss_theta + loss_h) / 3.0
 
 
 def loss_and_metrics(
@@ -444,6 +374,9 @@ def train_single_run(
     if is_pino:
         history["train_data_loss"] = []
         history["train_pde_loss"] = []
+        history["train_transport_res"] = []
+        history["train_coverage_res"] = []
+        history["train_growth_res"] = []
 
     best_val_loss = float("inf")
     best_epoch = 0
@@ -454,6 +387,9 @@ def train_single_run(
         train_mae_sum = 0.0
         data_loss_sum = 0.0
         pde_loss_sum = 0.0
+        transport_res_sum = 0.0
+        coverage_res_sum = 0.0
+        growth_res_sum = 0.0
         total_samples = 0
 
         for batch in train_loader:
@@ -472,21 +408,29 @@ def train_single_run(
                 predictions, targets, eval_mask, args.channel_weights
             )
 
+            b_size = params.shape[0]
+
             if is_pino:
-                pde_loss = physics_loss(
-                    predictions,
-                    params * param_std + param_mean,
-                    time * time_std + time_mean,
-                    phase,
-                    channel_masks,
-                    (field_mean, field_std),
-                    dx,
-                    dy,
+                pde_loss, pde_metrics = compute_physics_loss(
+                    model=model,
+                    parameters_norm=params,
+                    parameters_phys=params * param_std + param_mean,
+                    spatial_coords=spatial_coords,
+                    gas_mask=gas_mask_t.squeeze(0).bool(),
+                    surface_mask=surface_mask_t.squeeze(0).bool(),
+                    stats=(field_mean, field_std, time_mean, time_std),
+                    dx=dx,
+                    dy=dy,
+                    num_collocation_per_phase=2,
+                    num_cycles=num_cycles,
+                    k_growth=0.02,
                 )
-                pde_clamped = torch.nan_to_num(pde_loss, nan=0.0, posinf=1.0e4, neginf=1.0e4)
-                loss = data_mse + args.physics_weight * pde_clamped
-                data_loss_sum += data_mse.item() * params.shape[0]
-                pde_loss_sum += pde_loss.item() * params.shape[0]
+                loss = data_mse + args.physics_weight * pde_loss
+                data_loss_sum += data_mse.item() * b_size
+                pde_loss_sum += pde_loss.item() * b_size
+                transport_res_sum += pde_metrics["transport_mse"] * b_size
+                coverage_res_sum += pde_metrics["coverage_mse"] * b_size
+                growth_res_sum += pde_metrics["growth_mse"] * b_size
             else:
                 loss = data_mse
 
@@ -494,7 +438,6 @@ def train_single_run(
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.grad_clip)
             optimizer.step()
 
-            b_size = params.shape[0]
             train_loss_sum += loss.item() * b_size
             train_mae_sum += mae.item() * b_size
             total_samples += b_size
@@ -516,6 +459,9 @@ def train_single_run(
         if is_pino:
             history["train_data_loss"].append(data_loss_sum / max(total_samples, 1))
             history["train_pde_loss"].append(pde_loss_sum / max(total_samples, 1))
+            history["train_transport_res"].append(transport_res_sum / max(total_samples, 1))
+            history["train_coverage_res"].append(coverage_res_sum / max(total_samples, 1))
+            history["train_growth_res"].append(growth_res_sum / max(total_samples, 1))
 
         if epoch_val_loss < best_val_loss:
             best_val_loss = epoch_val_loss
@@ -597,6 +543,11 @@ def train_single_run(
     }
     if is_pino:
         metrics["physics_weight"] = float(args.physics_weight)
+        if history.get("train_pde_loss"):
+            metrics["final_train_pde_loss"] = float(history["train_pde_loss"][-1])
+            metrics["final_transport_mse"] = float(history["train_transport_res"][-1])
+            metrics["final_coverage_mse"] = float(history["train_coverage_res"][-1])
+            metrics["final_growth_mse"] = float(history["train_growth_res"][-1])
 
     with open(output_dir / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)

@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import NamedTuple
 
 import numpy as np
-import torch
+
+from thin_film_pino.physics.stencil import laplacian_numpy, laplacian_torch
 
 
 class GridGeometry(NamedTuple):
@@ -151,35 +152,11 @@ def validate_dt(
         )
 
 
-def laplacian_numpy(field: np.ndarray, dx: float, dy: float, gas_mask: np.ndarray) -> np.ndarray:
-    """Compute 2D discrete Laplacian with zero-flux Neumann conditions at solid boundaries."""
-    up = field.copy()
-    down = field.copy()
-    left = field.copy()
-    right = field.copy()
-
-    up[1:, :] = np.where(gas_mask[:-1, :], field[:-1, :], field[1:, :])
-    down[:-1, :] = np.where(gas_mask[1:, :], field[1:, :], field[:-1, :])
-    left[:, 1:] = np.where(gas_mask[:, :-1], field[:, :-1], field[:, 1:])
-    right[:, :-1] = np.where(gas_mask[:, 1:], field[:, 1:], field[:, :-1])
-
-    lap = (up + down - 2.0 * field) / (dy**2) + (left + right - 2.0 * field) / (dx**2)
-    return np.where(gas_mask, lap, 0.0)
-
-
-def laplacian_torch(
-    field: torch.Tensor, dx: float, dy: float, gas_mask: torch.Tensor
-) -> torch.Tensor:
-    """Compute 2D discrete Laplacian for batched PyTorch tensors with zero-flux boundaries."""
-    up = field.clone()
-    down = field.clone()
-    left = field.clone()
-    right = field.clone()
-
-    up[:, 1:, :] = torch.where(gas_mask[:, :-1, :], field[:, :-1, :], field[:, 1:, :])
-    down[:, :-1, :] = torch.where(gas_mask[:, 1:, :], field[:, 1:, :], field[:, :-1, :])
-    left[:, :, 1:] = torch.where(gas_mask[:, :, :-1], field[:, :, :-1], field[:, :, 1:])
-    right[:, :, :-1] = torch.where(gas_mask[:, :, 1:], field[:, :, 1:], field[:, :, :-1])
-
-    lap = (up + down - 2.0 * field) / (dy**2) + (left + right - 2.0 * field) / (dx**2)
-    return torch.where(gas_mask, lap, torch.zeros_like(lap))
+__all__ = [
+    "GridGeometry",
+    "build_geometry",
+    "compute_stable_dt",
+    "validate_dt",
+    "laplacian_numpy",
+    "laplacian_torch",
+]

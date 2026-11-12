@@ -14,7 +14,7 @@ Modelling Assumptions
    (25 to 200 s); clearance is an idealized operational assumption rather than a diffusive result.
 3. Reaction Isolation: Adsorption occurs only during precursor dose. Co-reactant surface
    reaction occurs only during the reaction phase. Desorption is inactive during purge.
-4. Mass Conservation: Global mass conservation is not enforced. The precursor surface sink
+4. Mass Non-Conservation: Mass is not conserved. The precursor surface sink
    does not depend on absolute surface site density, and desorption does not return vapor
    into the gas domain.
 5. Incomplete Reaction Carryover: With k_rxn in [0.1, 0.8] s^-1 and reaction_time = 1.0 s,

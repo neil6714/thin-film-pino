@@ -211,15 +211,31 @@ class TemporalFourierOperator(nn.Module):
             )
             spatial_grid = torch.cat([spatial_grid, pad], dim=0)
 
-        # 1. Physical parameters: (B, P) -> (B, T, P)
-        p_expanded = parameters.unsqueeze(1).expand(-1, time_steps, -1)
+        # 1. Physical parameters: (B, P) -> (B * T, P, H, W)
+        p_expanded = (
+            parameters.unsqueeze(1)
+            .expand(-1, time_steps, -1)
+            .unsqueeze(-1)
+            .unsqueeze(-1)
+            .expand(-1, -1, -1, height, width)
+            .reshape(batch_size * time_steps, -1, height, width)
+        )
 
-        # 2. Continuous time: (B, T, 1)
-        t_expanded = time.unsqueeze(-1) if time.ndim == 2 else time
+        # 2. Continuous time: (B * T, 1, H, W)
+        if time.ndim == 5:
+            t_reshaped = time.reshape(batch_size * time_steps, 1, height, width)
+        else:
+            t_expanded = time.unsqueeze(-1) if time.ndim == 2 else time
+            t_reshaped = (
+                t_expanded.unsqueeze(-1)
+                .unsqueeze(-1)
+                .expand(-1, -1, -1, height, width)
+                .reshape(batch_size * time_steps, 1, height, width)
+            )
 
-        conditioning_list = [p_expanded, t_expanded]
+        conditioning_list = [p_expanded, t_reshaped]
 
-        # 3. Discrete phase one-hot: (B, T, num_phases)
+        # 3. Discrete phase one-hot: (B * T, num_phases, H, W)
         if self.num_phases > 0:
             if phase is not None:
                 if phase.ndim == 1:
@@ -237,9 +253,15 @@ class TemporalFourierOperator(nn.Module):
                     device=parameters.device,
                     dtype=parameters.dtype,
                 )
-            conditioning_list.append(phase_one_hot)
+            phase_broadcast = (
+                phase_one_hot.unsqueeze(-1)
+                .unsqueeze(-1)
+                .expand(-1, -1, -1, height, width)
+                .reshape(batch_size * time_steps, -1, height, width)
+            )
+            conditioning_list.append(phase_broadcast)
 
-        # 4. Cycle fraction: (B, T, 1)
+        # 4. Cycle fraction: (B * T, 1, H, W)
         if self.include_cycle:
             if cycle_fraction is not None:
                 if cycle_fraction.ndim == 1:
@@ -255,18 +277,16 @@ class TemporalFourierOperator(nn.Module):
                     device=parameters.device,
                     dtype=parameters.dtype,
                 )
-            conditioning_list.append(c_frac)
+            c_frac_broadcast = (
+                c_frac.unsqueeze(-1)
+                .unsqueeze(-1)
+                .expand(-1, -1, -1, height, width)
+                .reshape(batch_size * time_steps, 1, height, width)
+            )
+            conditioning_list.append(c_frac_broadcast)
 
-        # Concatenate scalar conditionings: (B, T, scalar_channels)
-        scalars = torch.cat(conditioning_list, dim=-1)
-
-        # Spatially broadcast scalar features: (B * T, scalar_channels, H, W)
-        scalars = (
-            scalars.unsqueeze(-1)
-            .unsqueeze(-1)
-            .expand(-1, -1, -1, height, width)
-            .reshape(batch_size * time_steps, -1, height, width)
-        )
+        # Concatenate conditionings: (B * T, scalar_channels, H, W)
+        scalars = torch.cat(conditioning_list, dim=1)
 
         # Spatial grid features: (B * T, spatial_channels, H, W)
         spatial_expanded = spatial_grid.unsqueeze(0).expand(batch_size * time_steps, -1, -1, -1)
