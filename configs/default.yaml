@@ -1,0 +1,9 @@
+# Default training configuration for Thin-Film PINO neural operator models
+model: fno
+epochs: 50
+batch_size: 4
+learning_rate: 1.0e-3
+width: 32
+modes: 12
+seed: 123
+physics_weight: 1.0e-4

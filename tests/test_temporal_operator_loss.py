@@ -2,16 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-import sys
-
 import torch
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from training.train_temporal_operator import loss_and_metrics
+from thin_film_pino.training.train import loss_and_metrics
 
 
 def test_masked_loss_aggregation() -> None:
@@ -29,7 +22,7 @@ def test_masked_loss_aggregation() -> None:
 
 def main() -> None:
     test_masked_loss_aggregation()
-    print("Masked loss aggregation test passed successfully (MSE=13.0, MAE=3.0, valid=2).")
+    print("Masked loss aggregation test passed (MSE=13.0, MAE=3.0, valid=2).")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software in academic research, please cite it as below."
+title: "Thin-Film PINO: Transient ALD Simulator and Physics-Informed Neural Operator Surrogate"
+version: 0.1.0
+date-released: 2026-10-15
+url: "https://github.com/neil6714/thin-film-pino"
+license: MIT
+authors:
+  - family-names: Pandit
+    given-names: Neil
