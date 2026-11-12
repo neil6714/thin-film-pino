@@ -16,6 +16,7 @@ from thin_film_pino.physics.geometry import (
     validate_dt,
 )
 from thin_film_pino.physics.simulator import ThinFilmDepositionSimulator
+from thin_film_pino.physics.stencil import laplacian_numpy
 from thin_film_pino.physics.transient_cuda import TransientALDCudaSimulator
 
 
@@ -257,3 +258,122 @@ def test_golden_regression_matches() -> None:
     np.testing.assert_allclose(th_f[0], golden["surface_coverage"], atol=1e-12, rtol=1e-10)
     np.testing.assert_allclose(h_f[0], golden["film_thickness"], atol=1e-12, rtol=1e-10)
 
+
+def test_simulator_symmetry() -> None:
+    """Verify that symmetric trench geometry produces horizontally symmetric fields."""
+    sim = ThinFilmDepositionSimulator(
+        diffusivity=2.0e-3,
+        k_ads=1.0,
+        k_des=0.1,
+        k_rxn=0.4,
+        k_growth=0.02,
+        pulse_time=2.0,
+        purge_time=1.0,
+        reaction_time=1.0,
+        num_cycles=1,
+        nx=21,  # Odd width guarantees an exact vertical centerline
+        ny=15,
+        dtype="float64",
+    )
+    sim.run()
+
+    # Flip horizontally and verify exact symmetry
+    np.testing.assert_allclose(sim.C, np.fliplr(sim.C), atol=1e-12, rtol=1e-10)
+    np.testing.assert_allclose(sim.theta, np.fliplr(sim.theta), atol=1e-12, rtol=1e-10)
+    np.testing.assert_allclose(sim.h, np.fliplr(sim.h), atol=1e-12, rtol=1e-10)
+
+
+def test_no_growth_when_k_rxn_zero() -> None:
+    """Verify that film thickness remains identically zero when k_rxn is zero."""
+    sim = ThinFilmDepositionSimulator(
+        diffusivity=2.0e-3,
+        k_ads=1.0,
+        k_des=0.1,
+        k_rxn=0.0,  # Zero reaction rate
+        k_growth=0.02,
+        pulse_time=2.0,
+        purge_time=1.0,
+        reaction_time=1.0,
+        num_cycles=2,
+        nx=20,
+        ny=15,
+        dtype="float64",
+    )
+    sim.run()
+
+    np.testing.assert_allclose(sim.h, 0.0, atol=1e-15)
+    assert np.all(sim.h == 0.0)
+
+
+def test_stencil_laplacian_properties() -> None:
+    """Verify that the discrete Laplacian is zero on constants and exact on quadratic fields."""
+    nx, ny = 25, 20
+    geom = build_geometry(nx=nx, ny=ny)
+    dx, dy = geom.dx, geom.dy
+
+    # 1. Constant field must produce zero Laplacian everywhere, including solid wall interfaces
+    const_field = np.ones((ny, nx), dtype=np.float64) * 3.7
+    lap_const = laplacian_numpy(const_field, dx, dy, geom.gas_mask)
+    np.testing.assert_allclose(lap_const, 0.0, atol=1e-14)
+
+    # 2. Quadratic field: u(x, y) = a * x^2 + b * y^2 -> laplacian = 2*a + 2*b
+    a, b = 2.5, 1.8
+    x_grid, y_grid = np.meshgrid(geom.x, geom.y)
+    quad_field = a * (x_grid**2) + b * (y_grid**2)
+    lap_quad = laplacian_numpy(quad_field, dx, dy, geom.gas_mask)
+
+    # Interior gas nodes well away from walls (rows 2 to 5, columns 2 to 22)
+    interior_gas_patch = np.zeros((ny, nx), dtype=bool)
+    interior_gas_patch[2:6, 2:23] = True
+    interior_gas_patch &= geom.gas_mask
+
+    expected_analytic_lap = 2.0 * a + 2.0 * b
+    np.testing.assert_allclose(
+        lap_quad[interior_gas_patch], expected_analytic_lap, atol=1e-11, rtol=1e-9
+    )
+
+
+def test_batch_invariance() -> None:
+    """Verify that a simulation sample produces identical results alone and inside a batch."""
+    p0 = [2.0e-3, 1.0, 0.05, 0.4, 0.02, 2.0, 1.0, 1.0]
+    p1 = [4.0e-3, 0.8, 0.02, 0.6, 0.02, 3.0, 1.0, 1.0]
+
+    nx, ny = 20, 15
+    dt = 0.01
+
+    # Run p0 alone (batch_size = 1)
+    sim_solo = BatchedTransientALDCudaSimulator(
+        parameters=np.asarray([p0]),
+        nx=nx,
+        ny=ny,
+        device="cpu",
+        dtype="float64",
+        dt=dt,
+    )
+    p_steps_solo = int(sim_solo.pulse_steps().item())
+    active_1 = torch.ones(1, dtype=torch.bool, device="cpu")
+    for _ in range(p_steps_solo):
+        sim_solo.transport_step(active_1, pulse=True)
+    sim_solo.reaction_step()
+    c_solo, th_solo, h_solo = sim_solo.snapshot()
+
+    # Run [p0, p1] in batch (batch_size = 2)
+    sim_batch = BatchedTransientALDCudaSimulator(
+        parameters=np.asarray([p0, p1]),
+        nx=nx,
+        ny=ny,
+        device="cpu",
+        dtype="float64",
+        dt=dt,
+    )
+    p_steps_batch = sim_batch.pulse_steps()
+    max_steps = int(p_steps_batch.max().item())
+    for s in range(1, max_steps + 1):
+        sim_batch.transport_step(p_steps_batch >= s, pulse=True)
+    sim_batch.reaction_step()
+    c_batch, th_batch, h_batch = sim_batch.snapshot()
+
+    # Sample 0 in the batch must be identical to solo run to machine precision
+    np.testing.assert_allclose(c_batch[0], c_solo[0], atol=1e-14, rtol=1e-12)
+    np.testing.assert_allclose(th_batch[0], th_solo[0], atol=1e-14, rtol=1e-12)
+    np.testing.assert_allclose(h_batch[0], h_solo[0], atol=1e-14, rtol=1e-12)

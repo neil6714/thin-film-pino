@@ -200,9 +200,7 @@ def generate_qualitative_figures(
 
     if len(time_indices) < 2:
         # Uniform time sampling fallback
-        time_indices = [
-            int(idx) for idx in np.linspace(0, n_time - 1, num_time_samples, dtype=int)
-        ]
+        time_indices = [int(idx) for idx in np.linspace(0, n_time - 1, num_time_samples, dtype=int)]
         phase_labels = [f"step_{idx}" for idx in time_indices]
 
     created_plots: List[Path] = []

@@ -210,3 +210,41 @@ def test_golden_simulator_residual_convergence() -> None:
 
     assert res1 < 1.0, f"Expected small residual at dt1, got {res1}"
     assert res2 < res1, f"Expected residual to shrink with dt (res2={res2} < res1={res1})"
+
+
+def test_autograd_time_derivative_analytic() -> None:
+    """Verify that autograd derivative with respect to normalized time equals analytic derivative."""
+    time_mean = 25.0
+    time_std = 15.0
+
+    # Sample test times in physical units
+    t_phys = torch.tensor([5.0, 15.0, 25.0, 35.0, 45.0], dtype=torch.float64)
+    t_norm = ((t_phys - time_mean) / time_std).requires_grad_(True)
+
+    # Known analytical function: f(t) = 3*t^3 - 5*t^2 + 2*t
+    # df/dt = 9*t^2 - 10*t + 2
+    f_t = (
+        3.0 * ((t_norm * time_std + time_mean) ** 3)
+        - 5.0 * ((t_norm * time_std + time_mean) ** 2)
+        + 2.0 * (t_norm * time_std + time_mean)
+    )
+
+    grad_norm = torch.autograd.grad(
+        outputs=f_t,
+        inputs=t_norm,
+        grad_outputs=torch.ones_like(f_t),
+        create_graph=False,
+    )[0]
+
+    # Convert derivative w.r.t. t_norm to physical derivative: df/dt = (df/dt_norm) / time_std
+    df_dt_autograd = grad_norm / time_std
+
+    # Exact analytic derivative
+    df_dt_analytic = 9.0 * (t_phys**2) - 10.0 * t_phys + 2.0
+
+    np.testing.assert_allclose(
+        df_dt_autograd.detach().numpy(),
+        df_dt_analytic.numpy(),
+        atol=1e-11,
+        rtol=1e-9,
+    )

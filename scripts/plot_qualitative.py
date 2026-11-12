@@ -68,7 +68,9 @@ def main(args: Optional[Sequence[str]] = None) -> None:
     gas_mask_t = torch.as_tensor(data["gas_mask"], device=device).float().unsqueeze(0)
     spatial_coords = torch.cat([coords_2d, gas_mask_t], dim=0)
 
-    p_tensor = torch.as_tensor(data["parameters"][raw_traj_idx : raw_traj_idx + 1], device=device).float()
+    p_tensor = torch.as_tensor(
+        data["parameters"][raw_traj_idx : raw_traj_idx + 1], device=device
+    ).float()
     t_tensor = torch.as_tensor(data["time"][raw_traj_idx : raw_traj_idx + 1], device=device).float()
 
     ph_tensor = (

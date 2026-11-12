@@ -1,5 +1,8 @@
 # Physics-Informed Neural Operator for Transient Atomic Layer Deposition
 
+[![CI](https://github.com/neil6714/thin-film-pino/actions/workflows/ci.yml/badge.svg)](https://github.com/neil6714/thin-film-pino/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A continuum modeling and scientific machine learning framework for simulating transient atomic layer deposition (ALD) in 2D trench geometries and learning neural operator surrogates with physics-informed residual penalties.
 
 ---

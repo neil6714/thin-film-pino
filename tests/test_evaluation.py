@@ -218,6 +218,22 @@ def test_baseline_predictions(mock_evaluation_data):
     assert train_mean_pred.shape == (len(test_idx), 8, 3, 15, 20)
     assert persistence_pred.shape == (len(test_idx), 8, 3, 15, 20)
 
+    # Train-mean baseline matches explicit formula
+    gas_mask = data["gas_mask"].astype(bool)
+    surf_mask = data["surface_mask"].astype(bool)
+    np.testing.assert_allclose(train_mean_pred[:, :, 0, gas_mask], data["field_mean"][0])
+    np.testing.assert_allclose(train_mean_pred[:, :, 0, ~gas_mask], 0.0)
+    np.testing.assert_allclose(train_mean_pred[:, :, 1, surf_mask], data["field_mean"][1])
+    np.testing.assert_allclose(train_mean_pred[:, :, 1, ~surf_mask], 0.0)
+    np.testing.assert_allclose(train_mean_pred[:, :, 2, surf_mask], data["field_mean"][2])
+    np.testing.assert_allclose(train_mean_pred[:, :, 2, ~surf_mask], 0.0)
+
+    # Persistence baseline matches t=0 snapshot held constant
+    c_phys = data["concentration"][test_idx] * data["field_std"][0] + data["field_mean"][0]
+    c_phys[:, :, ~gas_mask] = 0.0
+    for t in range(8):
+        np.testing.assert_allclose(persistence_pred[:, t, 0], c_phys[:, 0])
+
     # Persistence should hold time step 0 constant across all time
     for t in range(8):
         assert np.allclose(persistence_pred[:, t], persistence_pred[:, 0])
@@ -320,3 +336,41 @@ def test_qualitative_plotting(tmp_path, mock_evaluation_data):
 
     assert out_png.exists()
     assert out_png.stat().st_size > 0
+
+
+def test_perfect_predictor_gives_zero_error(mock_evaluation_data) -> None:
+    """Verify that a perfect prediction produces exact zero MAE, RMSE, and relative L2 error."""
+    data = mock_evaluation_data
+    c_true = data["concentration"]
+    th_true = data["surface_coverage"]
+    h_true = data["film_thickness"]
+
+    # Evaluate channel errors with y_pred == y_true
+    c_err = compute_channel_errors(c_true, c_true, data["gas_mask"])
+    th_err = compute_channel_errors(th_true, th_true, data["surface_mask"])
+    h_err = compute_channel_errors(h_true, h_true, data["surface_mask"])
+
+    assert c_err["MAE"] == 0.0
+    assert c_err["RMSE"] == 0.0
+    assert c_err["relative_L2"]["mean"] == 0.0
+    assert c_err["relative_L2"]["max"] == 0.0
+
+    assert th_err["MAE"] == 0.0
+    assert th_err["RMSE"] == 0.0
+    assert th_err["relative_L2"]["mean"] == 0.0
+
+    assert h_err["MAE"] == 0.0
+    assert h_err["RMSE"] == 0.0
+    assert h_err["relative_L2"]["mean"] == 0.0
+
+    # Derived cycle quantities on identical predictions
+    cycle_res = compute_derived_cycle_quantities(
+        pred_h=h_true,
+        ref_h=h_true,
+        surface_mask=data["surface_mask"],
+        field_mask=data["field_mask"],
+        floor_mask=data["floor_mask"],
+        cycle=data["cycle"],
+    )
+    assert cycle_res["gpc_mae_overall"] == 0.0
+    assert cycle_res["step_coverage_mae_overall"] == 0.0

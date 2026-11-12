@@ -182,17 +182,8 @@ class BatchedTransientALDCudaSimulator:
             )
             validate_dt(dt, self.dx, self.dy, max_d, max_rate, max_rate, max_rate)
             self.dt = float(dt)
-        elif self.batch_size == 1:
-            self.dt = compute_stable_dt(
-                self.dx,
-                self.dy,
-                float(self.diffusivity[0, 0, 0].item()),
-                float(self.k_ads[0, 0, 0].item()),
-                float(self.k_des[0, 0, 0].item()),
-                float(self.k_rxn[0, 0, 0].item()),
-            )
         else:
-            # Fixed upper bounds from prior: D_max = 8.0e-3, k_max = 1.5
+            # Fixed upper bounds from prior: D_max = 8.0e-3, k_ads_max = 1.5, k_des_max = 0.10, k_rxn_max = 0.80
             self.dt = compute_stable_dt(
                 self.dx,
                 self.dy,

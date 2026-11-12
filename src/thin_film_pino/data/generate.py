@@ -28,7 +28,7 @@ from thin_film_pino.data.parameters import (
     sample_parameter_ensemble,
 )
 from thin_film_pino.physics.batched_transient_cuda import BatchedTransientALDCudaSimulator
-from thin_film_pino.physics.geometry import build_geometry
+from thin_film_pino.physics.geometry import build_geometry, compute_stable_dt
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +96,7 @@ def simulate_batch_trajectory(
         trench_right=args.trench_right,
         trench_top=args.trench_top,
         trench_bottom=args.trench_bottom,
+        dt=getattr(args, "dt", None),
         dtype=args.dtype,
         device=args.device,
     )
@@ -281,6 +282,7 @@ def simulate_batch_final_state(
         trench_right=args.trench_right,
         trench_top=args.trench_top,
         trench_bottom=args.trench_bottom,
+        dt=getattr(args, "dt", None),
         dtype=args.dtype,
         device=args.device,
     )
@@ -494,6 +496,16 @@ def generate(
         trench_bottom=trench_bottom,
     )
 
+    # Time step determination: compute once globally from prior bounds
+    global_dt = compute_stable_dt(
+        geom.dx,
+        geom.dy,
+        float(priors.get("parameters", {}).get("diffusivity", {}).get("high", 8.0e-3)),
+        float(priors.get("parameters", {}).get("k_ads", {}).get("high", 1.5)),
+        float(priors.get("parameters", {}).get("k_des", {}).get("high", 0.10)),
+        float(priors.get("parameters", {}).get("k_rxn", {}).get("high", 0.80)),
+    )
+
     args = argparse.Namespace(
         nx=nx,
         ny=ny,
@@ -504,6 +516,7 @@ def generate(
         trench_top=trench_top,
         trench_bottom=trench_bottom,
         num_cycles=num_cycles,
+        dt=global_dt,
         dtype=dtype,
         device=device,
     )

@@ -183,3 +183,91 @@ def test_unified_generator_and_validator(tmp_path: Path) -> None:
 
         # In final_state, concentration is non-zero because it was snapshotted at end of dose
         assert data_final["concentration"].max() > 0.0
+
+
+def test_generator_batch_size_invariance(tmp_path: Path) -> None:
+    """Verify that dataset generation produces identical results regardless of chunk batch size."""
+    p_b1 = tmp_path / "gen_b1.npz"
+    p_b2 = tmp_path / "gen_b2.npz"
+
+    # Generate 2 samples using batch_size=1
+    generate(
+        mode="trajectory",
+        num_samples=2,
+        batch_size=1,
+        num_cycles=1,
+        snapshots_per_phase=2,
+        nx=20,
+        ny=15,
+        seed=101,
+        output_path=p_b1,
+        device="cpu",
+    )
+
+    # Generate identical 2 samples using batch_size=2
+    generate(
+        mode="trajectory",
+        num_samples=2,
+        batch_size=2,
+        num_cycles=1,
+        snapshots_per_phase=2,
+        nx=20,
+        ny=15,
+        seed=101,
+        output_path=p_b2,
+        device="cpu",
+    )
+
+    with np.load(p_b1) as d1, np.load(p_b2) as d2:
+        np.testing.assert_array_equal(d1["parameters"], d2["parameters"])
+        np.testing.assert_allclose(d1["concentration"], d2["concentration"], atol=1e-12)
+        np.testing.assert_allclose(d1["surface_coverage"], d2["surface_coverage"], atol=1e-12)
+        np.testing.assert_allclose(d1["film_thickness"], d2["film_thickness"], atol=1e-12)
+
+
+def test_validator_failure_on_nans_and_bounds(tmp_path: Path) -> None:
+    """Verify that dataset validator rejects data containing NaNs or out-of-bounds states."""
+    p_clean = tmp_path / "clean_data.npz"
+    generate(
+        mode="trajectory",
+        num_samples=2,
+        batch_size=2,
+        num_cycles=1,
+        snapshots_per_phase=2,
+        nx=20,
+        ny=15,
+        seed=77,
+        output_path=p_clean,
+        device="cpu",
+    )
+
+    clean_dict = dict(np.load(p_clean))
+    passed, _ = validate_dataset(clean_dict, input_path=p_clean)
+    assert passed
+
+    # 1. Injected NaN in concentration
+    nan_dict = dict(clean_dict)
+    nan_c = nan_dict["concentration"].copy()
+    nan_c[0, 0, 2, 2] = np.nan
+    nan_dict["concentration"] = nan_c
+    passed_nan, report_nan = validate_dataset(nan_dict)
+    assert not passed_nan
+    assert not report_nan["checks"]["no_nan_or_inf"]
+
+    # 2. Injected out-of-bounds coverage (> 1.0)
+    high_th_dict = dict(clean_dict)
+    th_bad = high_th_dict["surface_coverage"].copy()
+    th_bad[0, 0, 7, 5] = 1.5
+    high_th_dict["surface_coverage"] = th_bad
+    passed_th, report_th = validate_dataset(high_th_dict)
+    assert not passed_th
+    assert not report_th["checks"]["coverage_bounded"]
+
+    # 3. Injected negative concentration (< 0.0)
+    neg_c_dict = dict(clean_dict)
+    neg_c = neg_c_dict["concentration"].copy()
+    neg_c[0, 0, 1, 1] = -0.3
+    neg_c_dict["concentration"] = neg_c
+    passed_neg, report_neg = validate_dataset(neg_c_dict)
+    assert not passed_neg
+    assert not report_neg["checks"]["concentration_nonnegative"]
