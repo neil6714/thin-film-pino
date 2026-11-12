@@ -195,7 +195,8 @@ thin-film-pino/
 │   ├── generate_data.py            # Unified dataset generator (trajectory and final_state modes)
 │   ├── prepare_temporal_dataset.py # Stratified splitting with OOD holdout and normalization
 │   ├── validate_transient_dataset.py # Dataset physical invariant and split audit suite
-│   ├── validate_cuda_reference.py  # Reference CPU vs. accelerated PyTorch parity verifier
+│   ├── parity.py                   # Multi-sample CPU parity verification between NumPy and PyTorch
+│   ├── grid_convergence.py         # Discretization error and observed spatial order analysis
 │   ├── inspect_dataset.py          # Summary statistics, distributions, and spatial plots
 │   ├── compare_models.py           # Comparative benchmarking across models and baselines
 │   ├── plot_losses.py              # Loss convergence visualization for explicit metric keys
@@ -231,12 +232,16 @@ Install the package in editable mode with development dependencies:
 pip install -e .[dev]
 ```
 
-### 6.2 Simulator Parity Verification
+### 6.2 Simulator Parity and Grid Convergence
 
-Verify exact trajectory parity between the reference CPU solver and the accelerated PyTorch simulator on matched grids:
+Verify exact trajectory parity between reference CPU and accelerated PyTorch solvers across sampled parameter sets on matched grids, and evaluate spatial discretization error:
 
 ```bash
-python scripts/validate_cuda_reference.py --output results/validation --num-cycles 5 --nx 80 --ny 60 --dtype float64
+# Run multi-sample parity verification
+python scripts/parity.py --num-samples 20 --nx 20 --ny 15 --output results/parity/parity_metrics.json
+
+# Spatial grid convergence analysis (40x30, 80x60, 160x120)
+python scripts/grid_convergence.py --pulse-time 5.0 --output results/convergence/grid_convergence.json
 ```
 
 ### 6.3 Transient Trajectory Generation and Preparation

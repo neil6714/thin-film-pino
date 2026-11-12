@@ -303,13 +303,8 @@ class BatchedTransientALDCudaSimulator:
 
             new_theta = torch.clamp(new_theta, 0.0, 1.0)
             self.theta = torch.where(active_3d, new_theta, self.theta)
-            gas_inlet = self.gas_mask[0, 0, :]
-            inlet_val = torch.as_tensor(
-                self.inlet_concentration, dtype=self.dtype, device=self.device
-            )
-            self.C[active_t, 0] = torch.where(gas_inlet, inlet_val, self.C[active_t, 0])
-        else:
-            self.C[active_t, 0, :] = 0.0
+
+        self.apply_boundary_conditions(self.C, inlet_mask=pulse)
 
     def reaction_step(self, dt: Optional[float] = None) -> None:
         """Advance self-limiting co-reactant surface reaction and film growth by dt across batch."""

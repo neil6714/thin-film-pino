@@ -11,3 +11,9 @@ num_blocks: 4
 seed: 123
 physics_weight: 1.0e-4
 channel_weights: [1.0, 1.0, 1.0]
+
+# Verification tolerances
+parity:
+  max_abs_error_tol: 1.0e-12
+  rel_l2_tol: 1.0e-12
+  dtype: float64

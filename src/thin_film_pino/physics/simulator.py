@@ -176,10 +176,10 @@ class ThinFilmDepositionSimulator:
 
     def _apply_boundary_conditions(self, c_array: np.ndarray, inlet_c: float) -> np.ndarray:
         c_array[0, self.gas_mask[0, :]] = inlet_c
-        c_array[self.solid_mask] = 0.0
         c_array[:, 0] = c_array[:, 1]
         c_array[:, -1] = c_array[:, -2]
         c_array[-1, :] = c_array[-2, :]
+        c_array[self.solid_mask] = 0.0
         return c_array
 
     def step_diffusion(self, c_array: np.ndarray, dt_sub: float, inlet_c: float) -> np.ndarray:
@@ -196,7 +196,7 @@ class ThinFilmDepositionSimulator:
     def run_pulse_stage(self, duration: Optional[float] = None) -> float:
         """Execute precursor dose stage and return mean saturation coverage at dose conclusion."""
         stage_time = self.pulse_time if duration is None else duration
-        steps = max(1, int(np.ceil(stage_time / self.dt)))
+        steps = max(1, int(np.ceil(stage_time / self.dt - 1.0e-10)))
 
         for _ in range(steps):
             self.C = self._apply_boundary_conditions(self.C, self.c0)
@@ -239,7 +239,7 @@ class ThinFilmDepositionSimulator:
     def run_purge_stage(self, duration: Optional[float] = None) -> None:
         """Execute inert purge stage with idealized clearance of gas precursor."""
         stage_time = self.purge_time if duration is None else duration
-        steps = max(1, int(np.ceil(stage_time / self.dt)))
+        steps = max(1, int(np.ceil(stage_time / self.dt - 1.0e-10)))
 
         for _ in range(steps):
             self.C = self._apply_boundary_conditions(self.C, 0.0)
@@ -258,7 +258,7 @@ class ThinFilmDepositionSimulator:
     def run_reaction_stage(self, duration: Optional[float] = None) -> None:
         """Execute co-reactant exposure and surface film growth stage."""
         stage_time = self.reaction_time if duration is None else duration
-        steps = max(1, int(np.ceil(stage_time / self.dt)))
+        steps = max(1, int(np.ceil(stage_time / self.dt - 1.0e-10)))
 
         for _ in range(steps):
             th_surf = self.theta[self.surface_mask]

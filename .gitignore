@@ -212,6 +212,7 @@ tempCodeRunnerFile.py
 *.pt
 *.pth
 *.npz
+!tests/data/golden_regression.npz
 
 # Ruff stuff:
 .ruff_cache/

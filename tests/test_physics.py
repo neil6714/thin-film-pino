@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import torch
@@ -186,3 +188,72 @@ def test_transient_wrapper_delegation() -> None:
     assert wrapper.field_mask.shape == (15, 20)
     assert wrapper.floor_mask.shape == (15, 20)
     assert wrapper.clamp_stats["c_negative"] == 0
+
+
+def test_golden_regression_matches() -> None:
+    """Verify that current simulators exactly reproduce the committed golden regression run."""
+    golden_path = Path(__file__).resolve().parent / "data" / "golden_regression.npz"
+    assert golden_path.exists(), f"Golden regression file not found at: {golden_path}"
+
+    golden = np.load(golden_path)
+    p = golden["parameters"]
+    grid = golden["grid"]
+    ny, nx = int(grid[0]), int(grid[1])
+    num_cycles = int(golden["num_cycles"])
+
+    # 1. Run reference NumPy solver on golden setup
+    sim = ThinFilmDepositionSimulator(
+        diffusivity=float(p[0]),
+        k_ads=float(p[1]),
+        k_des=float(p[2]),
+        k_rxn=float(p[3]),
+        k_growth=float(p[4]),
+        pulse_time=float(p[5]),
+        purge_time=float(p[6]),
+        reaction_time=float(p[7]),
+        num_cycles=num_cycles,
+        nx=nx,
+        ny=ny,
+        dtype="float64",
+    )
+    sim.run()
+
+    np.testing.assert_allclose(sim.C, golden["concentration"], atol=1e-12, rtol=1e-10)
+    np.testing.assert_allclose(sim.theta, golden["surface_coverage"], atol=1e-12, rtol=1e-10)
+    np.testing.assert_allclose(sim.h, golden["film_thickness"], atol=1e-12, rtol=1e-10)
+    np.testing.assert_allclose(sim.history["gpc"], golden["gpc"], atol=1e-12, rtol=1e-10)
+    np.testing.assert_allclose(
+        sim.history["step_coverage"], golden["step_coverage"], atol=1e-12, rtol=1e-10
+    )
+
+    # 2. Run batched PyTorch solver with matching dt and verify exact parity
+    fast_sim = BatchedTransientALDCudaSimulator(
+        parameters=np.asarray([p]),
+        nx=nx,
+        ny=ny,
+        device="cpu",
+        dtype="float64",
+        dt=sim.dt,
+    )
+    pulse_steps = int(fast_sim.pulse_steps().item())
+    purge_steps = int(fast_sim.fixed_steps(fast_sim.purge_time))
+    reaction_steps = int(fast_sim.fixed_steps(fast_sim.reaction_time))
+    active_mask = torch.ones(1, dtype=torch.bool, device="cpu")
+
+    for _ in range(num_cycles):
+        for _ in range(pulse_steps):
+            fast_sim.transport_step(active_mask, pulse=True)
+        for _ in range(purge_steps):
+            fast_sim.transport_step(active_mask, pulse=False)
+        fast_sim.C.zero_()
+        for _ in range(reaction_steps):
+            fast_sim.reaction_step()
+        for _ in range(purge_steps):
+            fast_sim.transport_step(active_mask, pulse=False)
+        fast_sim.C.zero_()
+
+    c_f, th_f, h_f = fast_sim.snapshot()
+    np.testing.assert_allclose(c_f[0], golden["concentration"], atol=1e-12, rtol=1e-10)
+    np.testing.assert_allclose(th_f[0], golden["surface_coverage"], atol=1e-12, rtol=1e-10)
+    np.testing.assert_allclose(h_f[0], golden["film_thickness"], atol=1e-12, rtol=1e-10)
+
