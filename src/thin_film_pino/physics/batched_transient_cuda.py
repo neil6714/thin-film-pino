@@ -241,10 +241,10 @@ class BatchedTransientALDCudaSimulator:
         else:
             c_tensor[:, 0, :] = 0.0
 
-        c_tensor.masked_fill_(self.solid_mask, 0.0)
         c_tensor[:, :, 0] = c_tensor[:, :, 1]
         c_tensor[:, :, -1] = c_tensor[:, :, -2]
         c_tensor[:, -1, :] = c_tensor[:, -2, :]
+        c_tensor.masked_fill_(self.solid_mask, 0.0)
 
     def step_diffusion(self, dt: float, inlet_mask: bool = True) -> None:
         """Advance transient diffusion using 2D central differences with zero-flux boundaries."""
@@ -304,7 +304,10 @@ class BatchedTransientALDCudaSimulator:
             new_theta = torch.clamp(new_theta, 0.0, 1.0)
             self.theta = torch.where(active_3d, new_theta, self.theta)
             gas_inlet = self.gas_mask[0, 0, :]
-            self.C[active_t, 0, gas_inlet] = self.inlet_concentration
+            inlet_val = torch.as_tensor(
+                self.inlet_concentration, dtype=self.dtype, device=self.device
+            )
+            self.C[active_t, 0] = torch.where(gas_inlet, inlet_val, self.C[active_t, 0])
         else:
             self.C[active_t, 0, :] = 0.0
 
@@ -343,7 +346,7 @@ class BatchedTransientALDCudaSimulator:
 
     def snapshot(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Extract host NumPy arrays of concentration, coverage, and thickness across batch."""
-        return tuple(field.detach().cpu().numpy() for field in (self.C, self.theta, self.h))
+        return tuple(field.detach().cpu().numpy().copy() for field in (self.C, self.theta, self.h))
 
     def record_dose_coverage(self) -> np.ndarray:
         """Return mean saturation coverage at dose stage conclusion across batch."""

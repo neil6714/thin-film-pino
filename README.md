@@ -165,7 +165,8 @@ All quantities are nondimensionalized as documented in [Formulation](docs/formul
 ```
 thin-film-pino/
 ├── configs/
-│   └── default.yaml                # Default model hyperparameters
+│   ├── default.yaml                # Default model hyperparameters
+│   └── priors.yaml                 # Physical parameter priors and distribution bounds
 ├── docs/
 │   ├── figures/                    # Curated figures
 │   ├── archive/                    # Archived historical artifacts
@@ -173,28 +174,24 @@ thin-film-pino/
 │   └── known_limitations.md        # Documented simulator and surrogate limitations
 ├── scripts/
 │   ├── cycle_validation.py         # Multi-cycle GPC stabilization and linearity validation
-│   ├── kinetic_sweep.py            # 2D diffusivity vs reaction rate sensitivity sweeps
-│   ├── parameter_sweep.py          # Parameter sensitivity contour generator
+│   ├── sweeps.py                   # Parameter and kinetic sweeps (kinetic, pulse subcommands)
 │   ├── pulse_saturation.py         # Self-limiting Langmuir saturation verification
-│   ├── pulse_sweep.py              # Pulse duration conformality mapping
-│   ├── generate_data.py            # Steady-state deposition profile dataset generator
-│   ├── generate_final_dataset.py   # Verified multi-parameter steady-state dataset generator
-│   ├── generate_transient_dataset.py     # Transient trajectory dataset generator
-│   ├── generate_transient_dataset_fast.py # Accelerated batched transient trajectory generator
-│   ├── prepare_temporal_dataset.py # Splitting and normalization pipeline without leakage
-│   ├── validate_transient_dataset.py     # Dataset physical invariant and split audit suite
+│   ├── generate_data.py            # Unified dataset generator (trajectory and final_state modes)
+│   ├── prepare_temporal_dataset.py # Stratified splitting with OOD holdout and normalization
+│   ├── validate_transient_dataset.py # Dataset physical invariant and split audit suite
 │   ├── validate_cuda_reference.py  # Reference CPU vs. accelerated PyTorch parity verifier
 │   ├── inspect_dataset.py          # Summary statistics, distributions, and spatial plots
 │   ├── compare_models.py           # Comparative benchmarking across models
 │   └── plot_losses.py              # Unified loss convergence visualization
 ├── src/
 │   └── thin_film_pino/
-│       ├── data/                   # Data definitions, parameter distributions, splitting
+│       ├── data/                   # Data definitions, priors, generation, preparation, validation
 │       ├── evaluation/             # Checkpoint evaluation on held-out test data
 │       ├── models/                 # Fourier Neural Operator (FNO) architectures
 │       ├── physics/                # Unified continuum ALD simulators and geometry
 │       └── training/               # Unified training pipeline for FNO and PINO
 ├── tests/
+│   ├── test_data_pipeline.py       # Dataset generation, stratification, and validation tests
 │   ├── test_physics.py             # Physics, geometry masks, clamping, and solver parity
 │   └── test_temporal_operator_loss.py # Masked reduction unit test
 ├── pyproject.toml                  # Packaging specification and dependencies
@@ -227,11 +224,11 @@ python scripts/validate_cuda_reference.py --output results/validation --num-cycl
 Generate an accelerated ensemble of ALD trajectories and partition into train/val/test splits:
 
 ```bash
-# 1. Generate accelerated trajectory dataset
-python scripts/generate_transient_dataset_fast.py --num-samples 64 --batch-size 16 --output data/transient_ald_dataset_fast.npz
+# 1. Generate trajectory dataset (or --mode final_state)
+python scripts/generate_data.py --mode trajectory --num-samples 64 --batch-size 16 --output data/transient_ald_dataset.npz
 
-# 2. Partition into train (70%), validation (15%), and test (15%) splits
-python scripts/prepare_temporal_dataset.py --input data/transient_ald_dataset_fast.npz --output data/transient_ald_prepared.npz
+# 2. Stratify and partition into train (70%), validation (15%), test (15%), and OOD holdout
+python scripts/prepare_temporal_dataset.py --input data/transient_ald_dataset.npz --output data/transient_ald_prepared.npz
 
 # 3. Audit dataset integrity and physical bounds
 python scripts/validate_transient_dataset.py --input data/transient_ald_prepared.npz

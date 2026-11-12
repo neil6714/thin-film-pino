@@ -4,14 +4,17 @@ This directory stores generated simulation datasets (`.npz` files) and associate
 
 Datasets generated locally are excluded from version control by `.gitignore`.
 
-To generate a trajectory dataset, use the generation scripts in `scripts/`:
+To generate simulation datasets, use `scripts/generate_data.py`:
 
 ```bash
-# Generate accelerated batch trajectory dataset
-python scripts/generate_transient_dataset_fast.py --num-samples 64 --batch-size 16 --output data/transient_ald_dataset_fast.npz
+# Generate trajectory dataset
+python scripts/generate_data.py --mode trajectory --num-samples 64 --batch-size 16 --output data/transient_ald_dataset.npz
 
-# Partition and normalize without data leakage
-python scripts/prepare_temporal_dataset.py --input data/transient_ald_dataset_fast.npz --output data/transient_ald_prepared.npz
+# Or generate final-state dataset after N cycles
+python scripts/generate_data.py --mode final_state --num-samples 64 --batch-size 16 --output data/final_state_dataset.npz
+
+# Stratify and normalize without data leakage
+python scripts/prepare_temporal_dataset.py --input data/transient_ald_dataset.npz --output data/transient_ald_prepared.npz
 ```
 
 Published reference datasets can be hosted as GitHub release assets or Zenodo records.

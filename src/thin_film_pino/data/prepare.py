@@ -1,77 +1,140 @@
-"""Trajectory dataset partitioning and leakage-free normalization utilities."""
+"""Trajectory dataset partitioning, stratification, and leakage-free normalization utilities."""
 
 from __future__ import annotations
 
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 
 
-def split_indices(
-    num_trajectories: int,
-    train_fraction: float,
-    validation_fraction: float,
-    seed: int,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Partition trajectory indices into disjoint train, validation, and test subsets.
+def stratified_split_indices(
+    parameters: np.ndarray,
+    train_fraction: float = 0.70,
+    validation_fraction: float = 0.15,
+    ood_fraction: float = 0.10,
+    seed: int = 123,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Partition trajectory indices into train, validation, test, and out-of-distribution (OOD) subsets.
+
+    Stratifies in-distribution samples by pulse-time regime (short vs. long pulse) to guarantee
+    balanced representation across splits, and reserves the longest pulse trajectories for the OOD set.
 
     Parameters
     ----------
-    num_trajectories : int
-        Total number of independent simulation trajectories.
-    train_fraction : float
-        Proportion allocated to training.
-    validation_fraction : float
-        Proportion allocated to validation.
-    seed : int
-        RNG seed for permutation.
+    parameters : np.ndarray
+        Array of shape (N, 8) or (N, 5+) containing parameter values.
+    train_fraction : float, default=0.70
+        Fraction of in-distribution samples for training.
+    validation_fraction : float, default=0.15
+        Fraction of in-distribution samples for validation.
+    ood_fraction : float, default=0.10
+        Fraction of total trajectories reserved for the long-pulse OOD test set.
+    seed : int, default=123
+        Random seed for shuffling.
 
     Returns
     -------
-    Tuple[np.ndarray, np.ndarray, np.ndarray]
-        Sorted arrays of (train_indices, validation_indices, test_indices).
+    train_indices : np.ndarray
+    validation_indices : np.ndarray
+    test_indices : np.ndarray
+    ood_indices : np.ndarray
     """
-    if not 0.0 < train_fraction < 1.0:
-        raise ValueError("train_fraction must be between 0 and 1.")
-    if not 0.0 < validation_fraction < 1.0:
-        raise ValueError("validation_fraction must be between 0 and 1.")
-    if train_fraction + validation_fraction >= 1.0:
-        raise ValueError("Train and validation fractions must sum to less than 1.")
-    if num_trajectories < 3:
-        raise ValueError("At least three trajectories are required for train/val/test splitting.")
+    num_trajectories = int(parameters.shape[0])
+    if num_trajectories < 4:
+        raise ValueError(
+            "At least four trajectories are required for train/val/test/ood splitting."
+        )
 
-    indices = np.random.default_rng(seed).permutation(num_trajectories)
+    # Locate pulse_time index (index 5 in standard 8-parameter array, or last column)
+    pulse_idx = 5 if parameters.shape[1] > 5 else parameters.shape[1] - 1
+    pulse_times = parameters[:, pulse_idx]
 
-    num_train = int(np.floor(train_fraction * num_trajectories))
-    num_validation = int(np.floor(validation_fraction * num_trajectories))
-    num_test = num_trajectories - num_train - num_validation
+    rng = np.random.default_rng(seed)
 
-    if num_validation < 1:
-        num_validation = 1
-        if num_train > 1:
-            num_train -= 1
-        else:
-            num_test -= 1
+    # 1. Select Out-of-Distribution (OOD) trajectories: longest pulses
+    num_ood = max(1, int(np.round(ood_fraction * num_trajectories)))
+    sorted_by_pulse = np.argsort(pulse_times)
+    ood_indices = sorted_by_pulse[-num_ood:]
+    in_distribution_indices = sorted_by_pulse[:-num_ood]
 
-    if num_test < 1:
-        num_test = 1
-        if num_train > 1:
-            num_train -= 1
-        else:
-            num_validation -= 1
+    # 2. Stratify in-distribution samples by pulse-time regime (cutoff at 60.0)
+    in_pulses = pulse_times[in_distribution_indices]
+    short_mask = in_pulses <= 60.0
+    long_mask = in_pulses > 60.0
 
-    num_train = num_trajectories - num_validation - num_test
+    short_indices = in_distribution_indices[short_mask]
+    long_indices = in_distribution_indices[long_mask]
 
-    return (
-        np.sort(indices[:num_train]),
-        np.sort(indices[num_train : num_train + num_validation]),
-        np.sort(indices[num_train + num_validation :]),
-    )
+    def _split_subset(subset: np.ndarray) -> Tuple[List[int], List[int], List[int]]:
+        shuffled = rng.permutation(subset)
+        n = len(shuffled)
+        if n == 0:
+            return [], [], []
+        n_tr = max(1, int(np.floor(train_fraction * n)))
+        n_val = max(1 if n >= 3 else 0, int(np.round(validation_fraction * n)))
+        # Ensure at least 1 test sample if subset is reasonably sized
+        if n - n_tr - n_val < 1 and n >= 3:
+            n_tr = max(1, n_tr - 1)
+        tr = shuffled[:n_tr].tolist()
+        val = shuffled[n_tr : n_tr + n_val].tolist()
+        te = shuffled[n_tr + n_val :].tolist()
+        return tr, val, te
+
+    tr_short, val_short, te_short = _split_subset(short_indices)
+    tr_long, val_long, te_long = _split_subset(long_indices)
+
+    train_all = np.array(sorted(tr_short + tr_long), dtype=np.int64)
+    val_all = np.array(sorted(val_short + val_long), dtype=np.int64)
+    test_all = np.array(sorted(te_short + te_long), dtype=np.int64)
+    ood_all = np.array(sorted(ood_indices.tolist()), dtype=np.int64)
+
+    # Safety: ensure non-empty validation and test splits
+    if len(val_all) == 0 and len(train_all) > 1:
+        val_all = np.array([train_all[-1]])
+        train_all = train_all[:-1]
+    if len(test_all) == 0 and len(train_all) > 1:
+        test_all = np.array([train_all[-1]])
+        train_all = train_all[:-1]
+
+    return train_all, val_all, test_all, ood_all
+
+
+def split_indices(
+    num_trajectories: int,
+    train_fraction: float = 0.70,
+    validation_fraction: float = 0.15,
+    seed: int = 123,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compatibility wrapper for random trajectory splitting without stratification."""
+    rng = np.random.default_rng(seed)
+    shuffled = rng.permutation(num_trajectories)
+
+    n_train = int(np.floor(train_fraction * num_trajectories))
+    n_val = int(np.floor(validation_fraction * num_trajectories))
+
+    train = np.sort(shuffled[:n_train])
+    val = np.sort(shuffled[n_train : n_train + n_val])
+    test = np.sort(shuffled[n_train + n_val :])
+    return train, val, test
+
+
+def extract_active_parameters(parameters: np.ndarray) -> np.ndarray:
+    """Extract varying parameter columns, dropping constant parameters."""
+    if parameters.shape[1] >= 8:
+        # Indices 0 (diffusivity), 1 (k_ads), 2 (k_des), 3 (k_rxn), 5 (pulse_time)
+        return parameters[:, [0, 1, 2, 3, 5]].astype(np.float32)
+    return parameters.astype(np.float32)
 
 
 def masked_stats(values: np.ndarray, mask: np.ndarray) -> Tuple[float, float]:
     """Compute mean and standard deviation strictly over physically active cells."""
-    selected = values[:, :, mask]
+    if values.ndim == 4:
+        selected = values[:, :, mask]
+    elif values.ndim == 3:
+        selected = values[:, mask]
+    else:
+        selected = values[mask]
+
     mean = float(selected.mean())
     std = float(selected.std())
     return mean, max(std, 1.0e-8)
@@ -80,8 +143,31 @@ def masked_stats(values: np.ndarray, mask: np.ndarray) -> Tuple[float, float]:
 def normalize_field(values: np.ndarray, mask: np.ndarray, mean: float, std: float) -> np.ndarray:
     """Standardize field values using training statistics, zeroing inactive regions."""
     normalized = (values.astype(np.float32) - mean) / std
-    normalized[:, :, ~mask] = 0.0
+    if normalized.ndim == 4:
+        normalized[:, :, ~mask] = 0.0
+    elif normalized.ndim == 3:
+        normalized[:, ~mask] = 0.0
+    else:
+        normalized[~mask] = 0.0
     return normalized
+
+
+def denormalize_field(
+    normalized: np.ndarray, mask: np.ndarray, mean: float, std: float
+) -> np.ndarray:
+    """Denormalize field values and re-apply zero mask to inactive cells.
+
+    Because normalized zero is not physical zero (0 * std + mean = mean != 0),
+    cells outside the mask must be explicitly re-zeroed.
+    """
+    denorm = normalized.astype(np.float32) * std + mean
+    if denorm.ndim == 4:
+        denorm[:, :, ~mask] = 0.0
+    elif denorm.ndim == 3:
+        denorm[:, ~mask] = 0.0
+    else:
+        denorm[~mask] = 0.0
+    return denorm
 
 
 def compute_statistics(
@@ -98,8 +184,9 @@ def compute_statistics(
     theta_mean, theta_std = masked_stats(train_theta, surface_mask)
     h_mean, h_std = masked_stats(train_h, surface_mask)
 
-    p_mean = train_params.mean(axis=0)
-    p_std = train_params.std(axis=0)
+    active_params = extract_active_parameters(train_params)
+    p_mean = active_params.mean(axis=0)
+    p_std = active_params.std(axis=0)
     p_std[p_std < 1.0e-8] = 1.0
 
     t_mean = float(train_time.mean())
@@ -128,10 +215,12 @@ def apply_normalization(
     """Standardize arrays using provided training statistics."""
     f_mean = stats["field_mean"]
     f_std = stats["field_std"]
-    c_norm = normalize_field(c, gas_mask, f_mean[0], f_std[0])
-    theta_norm = normalize_field(theta, surface_mask, f_mean[1], f_std[1])
-    h_norm = normalize_field(h, surface_mask, f_mean[2], f_std[2])
+    c_norm = normalize_field(c, gas_mask, float(f_mean[0]), float(f_std[0]))
+    theta_norm = normalize_field(theta, surface_mask, float(f_mean[1]), float(f_std[1]))
+    h_norm = normalize_field(h, surface_mask, float(f_mean[2]), float(f_std[2]))
 
-    p_norm = (params - stats["parameter_mean"]) / stats["parameter_std"]
-    t_norm = (time - stats["time_mean"]) / stats["time_std"]
-    return c_norm, theta_norm, h_norm, p_norm, t_norm
+    active_params = extract_active_parameters(params)
+    p_norm = (active_params - stats["parameter_mean"]) / stats["parameter_std"]
+    t_norm = (time.astype(np.float32) - stats["time_mean"]) / stats["time_std"]
+
+    return c_norm, theta_norm, h_norm, p_norm.astype(np.float32), t_norm.astype(np.float32)
