@@ -14,7 +14,7 @@ import numpy as np
 
 from thin_film_pino.physics.simulator import ThinFilmDepositionSimulator
 
-DEFAULT_PULSE_TIMES = np.array([10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 60.0, 80.0, 100.0])
+DEFAULT_PULSE_TIMES = np.array([0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 25.0])
 
 
 def build_simulator(pulse_time: float, num_cycles: int = 10) -> ThinFilmDepositionSimulator:
@@ -32,15 +32,19 @@ def build_simulator(pulse_time: float, num_cycles: int = 10) -> ThinFilmDepositi
     )
 
 
-def surface_coverage_by_region(simulator: ThinFilmDepositionSimulator) -> Tuple[float, float]:
-    """Calculate mean fractional surface coverage in top and bottom trench regions."""
-    top_region = simulator.surface_mask & (simulator.Y < simulator.trench_top + 2.5 * simulator.dy)
-    bottom_region = simulator.surface_mask & (
-        simulator.Y > simulator.trench_bottom - 2.5 * simulator.dy
+def saturation_coverage_by_region(simulator: ThinFilmDepositionSimulator) -> Tuple[float, float]:
+    """Calculate mean saturation surface coverage at dose conclusion in field and floor regions."""
+    field_cov = (
+        float(np.mean(simulator.dose_theta[simulator.field_mask]))
+        if np.any(simulator.field_mask)
+        else 0.0
     )
-    top_cov = float(np.mean(simulator.theta[top_region])) if np.any(top_region) else 0.0
-    bottom_cov = float(np.mean(simulator.theta[bottom_region])) if np.any(bottom_region) else 0.0
-    return top_cov, bottom_cov
+    floor_cov = (
+        float(np.mean(simulator.dose_theta[simulator.floor_mask]))
+        if np.any(simulator.floor_mask)
+        else 0.0
+    )
+    return field_cov, floor_cov
 
 
 def save_figures(results: Dict[str, np.ndarray], output_dir: Path) -> None:
@@ -50,30 +54,34 @@ def save_figures(results: Dict[str, np.ndarray], output_dir: Path) -> None:
 
     plt.figure(figsize=(8, 5))
     plt.plot(pulses, results["gpc"], marker="o", color="blue")
-    plt.xlabel("Precursor Pulse Duration (s)")
-    plt.ylabel("Growth Per Cycle (m/cycle)")
-    plt.title("GPC vs Precursor Pulse Duration")
+    plt.xlabel("Precursor Dose Duration")
+    plt.ylabel("Growth Per Cycle (thickness/cycle)")
+    plt.title("GPC vs Precursor Dose Duration")
     plt.grid(alpha=0.3)
     plt.tight_layout()
     plt.savefig(output_dir / "pulse_vs_gpc.png", dpi=200)
     plt.close()
 
     plt.figure(figsize=(8, 5))
-    plt.plot(pulses, results["conformality"], marker="s", color="purple")
-    plt.xlabel("Precursor Pulse Duration (s)")
-    plt.ylabel("Step Coverage Conformality (Bottom / Top)")
-    plt.title("Conformality vs Precursor Pulse Duration")
+    plt.plot(pulses, results["step_coverage"], marker="s", color="purple")
+    plt.xlabel("Precursor Dose Duration")
+    plt.ylabel("Step Coverage (Floor / Field)")
+    plt.title("Step Coverage vs Precursor Dose Duration")
     plt.grid(alpha=0.3)
     plt.tight_layout()
     plt.savefig(output_dir / "pulse_vs_conformality.png", dpi=200)
     plt.close()
 
     plt.figure(figsize=(8, 5))
-    plt.plot(pulses, results["top_coverage"], marker="^", label="Top Surface Coverage")
-    plt.plot(pulses, results["bottom_coverage"], marker="v", label="Bottom Surface Coverage")
-    plt.xlabel("Precursor Pulse Duration (s)")
-    plt.ylabel("Fractional Surface Coverage theta")
-    plt.title("Surface Coverage vs Precursor Pulse Duration")
+    plt.plot(
+        pulses, results["field_saturation_coverage"], marker="^", label="Field Saturation Coverage"
+    )
+    plt.plot(
+        pulses, results["floor_saturation_coverage"], marker="v", label="Floor Saturation Coverage"
+    )
+    plt.xlabel("Precursor Dose Duration")
+    plt.ylabel("Saturation Surface Coverage")
+    plt.title("Dose Saturation Coverage vs Precursor Dose Duration")
     plt.grid(alpha=0.3)
     plt.legend()
     plt.tight_layout()
@@ -81,11 +89,11 @@ def save_figures(results: Dict[str, np.ndarray], output_dir: Path) -> None:
     plt.close()
 
     plt.figure(figsize=(8, 5))
-    plt.plot(pulses, results["top_thickness"], marker="^", label="Top Thickness")
-    plt.plot(pulses, results["bottom_thickness"], marker="v", label="Bottom Thickness")
-    plt.xlabel("Precursor Pulse Duration (s)")
-    plt.ylabel("Accumulated Film Thickness (m)")
-    plt.title("Film Thickness vs Precursor Pulse Duration")
+    plt.plot(pulses, results["field_thickness"], marker="^", label="Field Thickness")
+    plt.plot(pulses, results["floor_thickness"], marker="v", label="Floor Thickness")
+    plt.xlabel("Precursor Dose Duration")
+    plt.ylabel("Film Thickness")
+    plt.title("Film Thickness vs Precursor Dose Duration")
     plt.grid(alpha=0.3)
     plt.legend()
     plt.tight_layout()
@@ -95,29 +103,29 @@ def save_figures(results: Dict[str, np.ndarray], output_dir: Path) -> None:
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
     axes[0, 0].plot(pulses, results["gpc"], marker="o", color="blue")
     axes[0, 0].set_title("Growth Per Cycle")
-    axes[0, 0].set_xlabel("Pulse Time (s)")
-    axes[0, 0].set_ylabel("GPC (m/cycle)")
+    axes[0, 0].set_xlabel("Dose Duration")
+    axes[0, 0].set_ylabel("GPC (thickness/cycle)")
     axes[0, 0].grid(alpha=0.3)
 
-    axes[0, 1].plot(pulses, results["conformality"], marker="s", color="purple")
-    axes[0, 1].set_title("Step Coverage Conformality")
-    axes[0, 1].set_xlabel("Pulse Time (s)")
-    axes[0, 1].set_ylabel("Bottom / Top")
+    axes[0, 1].plot(pulses, results["step_coverage"], marker="s", color="purple")
+    axes[0, 1].set_title("Step Coverage")
+    axes[0, 1].set_xlabel("Dose Duration")
+    axes[0, 1].set_ylabel("Floor / Field")
     axes[0, 1].grid(alpha=0.3)
 
-    axes[1, 0].plot(pulses, results["top_coverage"], marker="^", label="Top")
-    axes[1, 0].plot(pulses, results["bottom_coverage"], marker="v", label="Bottom")
-    axes[1, 0].set_title("Surface Coverage")
-    axes[1, 0].set_xlabel("Pulse Time (s)")
-    axes[1, 0].set_ylabel("Coverage theta")
+    axes[1, 0].plot(pulses, results["field_saturation_coverage"], marker="^", label="Field")
+    axes[1, 0].plot(pulses, results["floor_saturation_coverage"], marker="v", label="Floor")
+    axes[1, 0].set_title("Dose Saturation Coverage")
+    axes[1, 0].set_xlabel("Dose Duration")
+    axes[1, 0].set_ylabel("Saturation Coverage")
     axes[1, 0].grid(alpha=0.3)
     axes[1, 0].legend()
 
-    axes[1, 1].plot(pulses, results["top_thickness"], marker="^", label="Top")
-    axes[1, 1].plot(pulses, results["bottom_thickness"], marker="v", label="Bottom")
-    axes[1, 1].set_title("Regional Thickness")
-    axes[1, 1].set_xlabel("Pulse Time (s)")
-    axes[1, 1].set_ylabel("Thickness (m)")
+    axes[1, 1].plot(pulses, results["field_thickness"], marker="^", label="Field")
+    axes[1, 1].plot(pulses, results["floor_thickness"], marker="v", label="Floor")
+    axes[1, 1].set_title("Film Thickness")
+    axes[1, 1].set_xlabel("Dose Duration")
+    axes[1, 1].set_ylabel("Thickness")
     axes[1, 1].grid(alpha=0.3)
     axes[1, 1].legend()
 
@@ -135,11 +143,11 @@ def run_sweep(
     results: Dict[str, list] = {
         "pulse_time": list(pulse_times),
         "gpc": [],
-        "top_thickness": [],
-        "bottom_thickness": [],
-        "conformality": [],
-        "top_coverage": [],
-        "bottom_coverage": [],
+        "field_thickness": [],
+        "floor_thickness": [],
+        "step_coverage": [],
+        "field_saturation_coverage": [],
+        "floor_saturation_coverage": [],
     }
 
     print("Beginning precursor pulse saturation sweep...")
@@ -147,18 +155,18 @@ def run_sweep(
         sim = build_simulator(pt, num_cycles=num_cycles)
         sim.run()
 
-        top_cov, bottom_cov = surface_coverage_by_region(sim)
+        field_cov, floor_cov = saturation_coverage_by_region(sim)
         results["gpc"].append(sim.history["gpc"][-1])
-        results["top_thickness"].append(sim.history["top_thickness"][-1])
-        results["bottom_thickness"].append(sim.history["bottom_thickness"][-1])
-        results["conformality"].append(sim.history["conformality"][-1])
-        results["top_coverage"].append(top_cov)
-        results["bottom_coverage"].append(bottom_cov)
+        results["field_thickness"].append(sim.history["field_thickness"][-1])
+        results["floor_thickness"].append(sim.history["floor_thickness"][-1])
+        results["step_coverage"].append(sim.history["step_coverage"][-1])
+        results["field_saturation_coverage"].append(field_cov)
+        results["floor_saturation_coverage"].append(floor_cov)
 
         print(
-            f"Pulse={pt:6.1f} s | GPC={results['gpc'][-1]:.6e} m/cycle | "
-            f"Conformality={results['conformality'][-1]:.6f} | "
-            f"Top theta={top_cov:.4f} | Bottom theta={bottom_cov:.4f}"
+            f"Pulse={pt:6.1f} | GPC={results['gpc'][-1]:.6e} | "
+            f"Step Coverage={results['step_coverage'][-1]:.6f} | "
+            f"Field sat theta={field_cov:.4f} | Floor sat theta={floor_cov:.4f}"
         )
 
     out_arrays = {k: np.asarray(v, dtype=np.float64) for k, v in results.items()}
@@ -176,7 +184,7 @@ def run_sweep(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Verify Langmuir self-limiting precursor saturation behavior in high-aspect-ratio features."
+        description="Verify Langmuir self-limiting precursor saturation behavior in trench features."
     )
     parser.add_argument(
         "--num-cycles", type=int, default=10, help="Cycles simulated per pulse duration."

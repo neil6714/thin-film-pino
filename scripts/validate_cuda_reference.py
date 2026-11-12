@@ -1,4 +1,4 @@
-"""Validation script comparing matched trajectories from reference and accelerated simulators."""
+"""Validation script verifying trajectory parity between reference CPU and accelerated simulators."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from scipy.ndimage import zoom
 
 from thin_film_pino.data.parameters import sample_parameters
 from thin_film_pino.physics.batched_transient_cuda import BatchedTransientALDCudaSimulator
@@ -21,7 +20,7 @@ from thin_film_pino.physics.simulator import ThinFilmDepositionSimulator
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Verify trajectory parity between reference CPU and accelerated PyTorch simulators."
+        description="Verify trajectory parity between reference CPU and PyTorch simulators on matched grids."
     )
     parser.add_argument(
         "--output",
@@ -37,8 +36,26 @@ def main() -> None:
     parser.add_argument(
         "--num-cycles",
         type=int,
-        default=10,
+        default=5,
         help="Number of ALD cycles to simulate for validation.",
+    )
+    parser.add_argument(
+        "--nx",
+        type=int,
+        default=80,
+        help="Horizontal grid resolution.",
+    )
+    parser.add_argument(
+        "--ny",
+        type=int,
+        default=60,
+        help="Vertical grid resolution.",
+    )
+    parser.add_argument(
+        "--dtype",
+        choices=["float32", "float64"],
+        default="float64",
+        help="Floating-point precision for parity comparison.",
     )
     args = parser.parse_args()
 
@@ -55,6 +72,9 @@ def main() -> None:
         purge_time=p[6],
         reaction_time=p[7],
         num_cycles=args.num_cycles,
+        nx=args.nx,
+        ny=args.ny,
+        dtype=args.dtype,
     )
 
     print("Executing reference CPU simulation...")
@@ -62,9 +82,12 @@ def main() -> None:
     ref_sim.run()
     ref_theta = ref_sim.theta
     ref_h = ref_sim.h
+    ref_c = ref_sim.C
 
     print("Executing accelerated PyTorch simulation...")
-    fast_sim = BatchedTransientALDCudaSimulator(np.asarray([p]), nx=80, ny=60)
+    fast_sim = BatchedTransientALDCudaSimulator(
+        np.asarray([p]), nx=args.nx, ny=args.ny, dtype=args.dtype, dt=ref_sim.dt
+    )
     pulse_steps = fast_sim.pulse_steps()
     purge_steps = fast_sim.fixed_steps(fast_sim.purge_time)
     reaction_steps = fast_sim.fixed_steps(fast_sim.reaction_time)
@@ -83,23 +106,32 @@ def main() -> None:
             fast_sim.transport_step(active_mask, pulse=False)
         fast_sim.C.zero_()
 
-    _, theta_batch, h_batch = fast_sim.snapshot()
+    c_batch, theta_batch, h_batch = fast_sim.snapshot()
     theta = theta_batch[0]
     h = h_batch[0]
+    c = c_batch[0]
 
-    ref_theta_resampled = zoom(ref_theta, (60 / 120, 80 / 160), order=1)
-    ref_h_resampled = zoom(ref_h, (60 / 120, 80 / 160), order=1)
+    err_theta = np.abs(ref_theta - theta)
+    err_h = np.abs(ref_h - h)
+    err_c = np.abs(ref_c - c)
 
-    err_theta = np.abs(ref_theta_resampled - theta)
-    err_h = np.abs(ref_h_resampled - h)
+    norm_ref_theta = float(np.linalg.norm(ref_theta))
+    norm_ref_h = float(np.linalg.norm(ref_h))
+
+    rel_l2_theta = float(np.linalg.norm(err_theta) / norm_ref_theta) if norm_ref_theta > 0 else 0.0
+    rel_l2_h = float(np.linalg.norm(err_h) / norm_ref_h) if norm_ref_h > 0 else 0.0
 
     metrics = {
+        "surface_coverage_max_error": float(err_theta.max()),
         "surface_coverage_mae": float(err_theta.mean()),
-        "surface_coverage_rmse": float(np.sqrt((err_theta**2).mean())),
+        "surface_coverage_rel_l2": rel_l2_theta,
+        "film_thickness_max_error": float(err_h.max()),
         "film_thickness_mae": float(err_h.mean()),
-        "film_thickness_rmse": float(np.sqrt((err_h**2).mean())),
-        "reference_grid": [120, 160],
-        "accelerated_grid": [60, 80],
+        "film_thickness_rel_l2": rel_l2_h,
+        "concentration_max_error": float(err_c.max()),
+        "grid": [args.ny, args.nx],
+        "dtype": args.dtype,
+        "dt": float(ref_sim.dt),
         "parameters": p.tolist(),
         "device": str(fast_sim.device),
     }
@@ -114,20 +146,20 @@ def main() -> None:
 
     for a, v, t in zip(
         ax[0],
-        [ref_h_resampled, h, err_h],
+        [ref_h, h, err_h],
         ["Reference Thickness", "Accelerated Thickness", "Absolute Error"],
     ):
-        im = a.imshow(v)
+        im = a.imshow(v, cmap="viridis")
         a.set_title(t)
         a.axis("off")
         fig.colorbar(im, ax=a, fraction=0.046, pad=0.04)
 
     for a, v, t in zip(
         ax[1],
-        [ref_theta_resampled, theta, err_theta],
+        [ref_theta, theta, err_theta],
         ["Reference Coverage", "Accelerated Coverage", "Absolute Error"],
     ):
-        im = a.imshow(v)
+        im = a.imshow(v, cmap="magma")
         a.set_title(t)
         a.axis("off")
         fig.colorbar(im, ax=a, fraction=0.046, pad=0.04)
