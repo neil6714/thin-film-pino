@@ -97,7 +97,6 @@ def main() -> None:
     all_passed = r2_passed and gpc_passed
 
     print(f"\nLinearized Multi-Cycle Growth Dynamics (Cycles >= {min_fit_cycle})")
-    print("-" * 55)
     print(f"Growth Rate Slope:        {slope:.6e} thickness/cycle")
     print(f"Linear Fit R^2:           {r2:.6f} (threshold: {args.r2_threshold:.4f})")
     print(f"Final Cycle GPC:          {gpc[-1]:.6e}")

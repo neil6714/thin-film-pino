@@ -118,13 +118,13 @@ def compute_stable_dt(
     k_ads: float,
     k_des: float,
     k_rxn: float,
-    cfl_factor: float = 0.20,
+    safety_factor: float = 0.20,
 ) -> float:
     """Calculate explicit FTCS stable time step bounded by diffusion and kinetics."""
     min_dim = min(dx, dy)
-    dt_diff = cfl_factor * (min_dim**2) / max(diffusivity, 1e-12)
+    dt_diff = safety_factor * (min_dim**2) / max(diffusivity, 1e-12)
     max_rate = max(k_ads, k_des, k_rxn, 1e-12)
-    dt_kin = cfl_factor / max_rate
+    dt_kin = safety_factor / max_rate
     return min(dt_diff, dt_kin)
 
 
@@ -139,16 +139,16 @@ def validate_dt(
 ) -> None:
     """Check user-supplied time step against diffusive and reaction stability criteria."""
     min_dim = min(dx, dy)
-    cfl_threshold = (min_dim**2) / (4.0 * max(diffusivity, 1e-12))
-    if dt >= cfl_threshold:
+    diffusive_limit = (min_dim**2) / (4.0 * max(diffusivity, 1e-12))
+    if dt >= diffusive_limit:
         raise ValueError(
-            f"Supplied dt={dt:.4e} s violates diffusive von Neumann stability limit ({cfl_threshold:.4e} s)."
+            f"Supplied dt={dt:.4e} violates diffusive von Neumann stability limit ({diffusive_limit:.4e})."
         )
     max_rate = max(k_ads, k_des, k_rxn, 1e-12)
     kinetic_limit = 1.0 / max_rate
     if dt > kinetic_limit:
         raise ValueError(
-            f"Supplied dt={dt:.4e} s exceeds reaction kinetic stability limit ({kinetic_limit:.4e} s)."
+            f"Supplied dt={dt:.4e} exceeds reaction kinetic stability limit ({kinetic_limit:.4e})."
         )
 
 

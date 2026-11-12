@@ -327,7 +327,6 @@ def main(args: Optional[Sequence[str]] = None) -> None:
     )
 
     wc = summary["worst_case_errors"]
-    print("-" * 65)
     print("Parity Verification Results (NumPy vs. PyTorch):")
     print(
         f"  - Mid-dose Concentration Max Abs Error: {wc['mid_dose_concentration_max_abs_err']:.4e} (Rel L2: {wc['mid_dose_concentration_rel_l2']:.4e})"
@@ -338,7 +337,6 @@ def main(args: Optional[Sequence[str]] = None) -> None:
     print(
         f"  - Evaluated: {summary['num_samples_evaluated']} samples | Status: {'PASSED' if summary['all_passed'] else 'FAILED'}"
     )
-    print("-" * 65)
 
     out_path = Path(parsed.output).resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)

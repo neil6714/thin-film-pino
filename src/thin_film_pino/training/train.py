@@ -252,6 +252,22 @@ def make_loader(
     return DataLoader(TensorDataset(*tensors), batch_size=batch_size, shuffle=shuffle)
 
 
+class ZeroBaseline(nn.Module):
+    """Baseline predictor outputting normalized zero (exact train mean)."""
+
+    def forward(
+        self,
+        params: torch.Tensor,
+        time: torch.Tensor,
+        coords: torch.Tensor,
+        **kwargs: Any,
+    ) -> torch.Tensor:
+        b_size = params.shape[0]
+        t_size = time.shape[1] if time.ndim >= 2 else 1
+        h, w = coords.shape[-2:]
+        return torch.zeros((b_size, t_size, 3, h, w), device=params.device, dtype=torch.float32)
+
+
 def evaluate_loader(
     model: nn.Module,
     loader: DataLoader,
@@ -354,7 +370,7 @@ def train_single_run(
 
     # Built-in sanity check: evaluate train-mean baseline (predicting 0 in normalized units)
     mean_mse, mean_mae = evaluate_loader(
-        lambda *_: torch.zeros(1, 1, 3, data["y"].size, data["x"].size, device=device),
+        ZeroBaseline(),
         train_loader,
         spatial_coords,
         eval_mask,

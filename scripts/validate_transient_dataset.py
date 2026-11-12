@@ -43,7 +43,6 @@ def main() -> None:
 
     status_str = "PASS" if passed else "FAIL"
     print(f"\nDataset Validation [{status_str}]: {input_path}")
-    print("-" * 60)
     for name, res in report["checks"].items():
         print(f"[{'PASS' if res else 'FAIL':4s}] {name}")
 

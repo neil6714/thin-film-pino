@@ -13,7 +13,7 @@ from thin_film_pino.data.prepare import denormalize_field, masked_stats
 def validate_dataset(
     data: Mapping[str, Any], input_path: Path | str = "dataset"
 ) -> Tuple[bool, Dict[str, Any]]:
-    """Execute comprehensive verification checks across raw or prepared ALD dataset.
+    """Execute verification checks across raw or prepared ALD dataset.
 
     Parameters
     ----------

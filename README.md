@@ -3,311 +3,335 @@
 [![CI](https://github.com/neil6714/thin-film-pino/actions/workflows/ci.yml/badge.svg)](https://github.com/neil6714/thin-film-pino/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A continuum modeling and scientific machine learning framework for simulating transient atomic layer deposition (ALD) in 2D trench geometries and learning neural operator surrogates with physics-informed residual penalties.
+A 2D continuum simulator and scientific machine learning surrogate for transient atomic layer deposition (ALD) in trench features. The physics core integrates vapor diffusion, Langmuir adsorption, desorption, and surface reaction via explicit forward-time central-space finite differences. The surrogate models map physical parameters and continuous time to spatial concentration, surface coverage, and film thickness fields using a Fourier Neural Operator regularized with continuous autograd physics residuals.
 
 ---
 
-## 1. Overview and Theoretical Foundations
+## 1. Project Status
 
-Atomic Layer Deposition (ALD) is a vapor-phase thin-film fabrication technique based on sequential, self-limiting surface chemical reactions. In trench structures, precursor transport is modeled via Fickian diffusion coupled to nonlinear Langmuir adsorption and desorption kinetics.
-
-This framework includes:
-1. **Continuum ALD Simulators**: 2D explicit forward-time central-space (FTCS) finite-difference solvers governed by diffusive von Neumann and reaction kinetic stability limits, with NumPy CPU and vectorized PyTorch GPU/CPU implementations sharing identical geometry and stencil code.
-2. **Temporal Fourier Neural Operators (TFNO)**: Deep operator networks mapping physical process parameters and time coordinates to spatial multi-field states $(\mathbf{p}, t) \mapsto (C, \theta, h)(x, y, t)$.
-3. **Physics-Informed Neural Operators (PINO)**: Operator learning regularized by penalizing the residual of the governing equations at continuous collocation points.
-
-For the mathematical derivation, scaling, and assumptions, see [Formulation](docs/formulation.md).
-For documented simulator and surrogate limitations, see [Known Limitations](docs/known_limitations.md).
-
----
-
-## 2. Mathematical and Physical Formulation
-
-### 2.1 Governing Equations
-
-The continuum transport-reaction system in a 2D domain $\Omega = [0, L_x] \times [0, L_y]$ is formulated in nondimensional variables:
-
-**1. Precursor Vapor Transport (Gas Domain $\Omega_{\text{gas}}$)**:
-
-$$\frac{\partial C}{\partial t} = D \nabla^2 C - R_{\text{ads}}(x, y, t)$$
-
-where $C(x, y, t)$ is nondimensional precursor concentration ($C/C_0$), $D$ is the constant diffusion coefficient, and $R_{\text{ads}}$ is the surface sink rate localized to boundary cells.
-
-**2. Surface Coverage Dynamics (Surface Boundary $\Gamma_{\text{surf}}$)**:
-
-$$\frac{\partial \theta}{\partial t} = R_{\text{ads}} - R_{\text{des}} - R_{\text{rxn}}$$
-
-governed by Langmuir self-limiting kinetics:
-
-$$R_{\text{ads}} = k_{\text{ads}} C (1 - \theta), \quad R_{\text{des}} = k_{\text{des}} \theta, \quad R_{\text{rxn}} = k_{\text{rxn}} \theta$$
-
-where $\theta(x, y, t) \in [0.0, 1.0]$ represents fractional coverage of chemisorbed precursor, $k_{\text{ads}}$ is the first-order adsorption rate constant, $k_{\text{des}}$ is the thermal desorption rate constant, and $k_{\text{rxn}}$ is the co-reactant reaction rate constant.
-
-**3. Film Thickness Evolution ($\Gamma_{\text{surf}}$)**:
-
-$$\frac{\partial h}{\partial t} = k_{\text{growth}} R_{\text{rxn}} = k_{\text{growth}} k_{\text{rxn}} \theta$$
-
-where $h(x, y, t)$ is accumulated film thickness and $k_{\text{growth}}$ is the thickness conversion coefficient per unit converted coverage.
-
-### 2.2 Boundary and Initial Conditions
-
-- **Reactor Inlet Boundary ($y = 0$)**:
-  - Dose Phase: Dirichlet boundary condition $C(x, 0, t) = C_0 = 1.0$.
-  - Purge and Reaction Phases: Zero-concentration boundary condition $C(x, 0, t) = 0.0$.
-- **Solid Wall and Trench Surfaces**:
-  - Homogeneous Neumann zero-flux condition $\nabla C \cdot \mathbf{n} = 0$.
-- **Initial State ($t = 0$)**:
-  $$C(x, y, 0) = 0, \quad \theta(x, y, 0) = 0, \quad h(x, y, 0) = 0$$
-
-### 2.3 Geometry and Regions
-
-The domain contains a rectangular trench feature:
-- Default dimensions: width $w = 0.25$, depth $d = 0.45$, corresponding to aspect ratio $AR = 0.45 / 0.25 = 1.8$.
-- High-aspect-ratio preset: `SimulationConfig.high_aspect_ratio_preset(aspect_ratio=10.0)` configures a narrow centered trench ($w = 0.045, d = 0.45$).
-- Explicit surface regions:
-  - **Field**: Wafer top surface outside the trench mouth.
-  - **Sidewall**: Vertical trench walls.
-  - **Floor**: Horizontal bottom of the trench.
-- **Step Coverage**: Defined as mean thickness on the floor divided by mean thickness on the field:
-  $$\text{Step Coverage} = \frac{\bar{h}_{\text{floor}}}{\bar{h}_{\text{field}}}$$
-
-### 2.4 Modelling Assumptions
-
-1. **Operator Splitting**: The four ALD phases (dose, purge, reaction, post-purge) execute sequentially.
-2. **Perfect Purge**: Gas precursor concentration is set to zero ($C \equiv 0$) at the end of each purge stage. Because the nominal purge duration ($1.0$) is much shorter than the diffusion timescale ($L^2/D \approx 25\text{--}200$), clearance is an operational model assumption rather than a physical transport result.
-3. **Reaction Stage Isolation**: Chemisorption occurs only during precursor dose. Co-reactant reaction occurs only during the reaction phase. Desorption is inactive during purge.
-4. **Mass Non-Conservation**: Mass is not conserved. The precursor sink in $C$ is not coupled to absolute surface site density, and desorption does not return precursor vapor back into the gas domain.
-5. **Incomplete Reaction Carryover**: For $k_{\text{rxn}} \in [0.1, 0.8]$ and $t_{\text{rxn}} = 1.0$, at most $55\%$ of chemisorbed precursor reacts per cycle, and remaining unreacted coverage carries over into subsequent cycles.
-6. **Bounds Enforcement**: Physical bounds $C \ge 0$ and $0 \le \theta \le 1$ are enforced by numerical clamping and monitored by activation counters (`clamp_stats`). Default parameters produce zero clamp activations.
-
-### 2.5 Stability Criteria
-
-The explicit 2D central-difference scheme enforces diffusive von Neumann and kinetic stability limits on time step $\Delta t$:
-
-$$\Delta t \le \min\left(0.20 \frac{\min(\Delta x, \Delta y)^2}{D_{\max}}, \frac{0.20}{\max(k_{\text{ads}}, k_{\text{des}}, k_{\text{rxn}})}\right)$$
-
-User-supplied time steps that exceed the von Neumann limit $\min(\Delta x, \Delta y)^2 / (4 D)$ or kinetic limit $1 / \max(k)$ are rejected with a ValueError.
+| Component | Status | Verification Summary |
+| :--- | :--- | :--- |
+| Continuum Simulators | **Validated** | Reference NumPy and accelerated PyTorch CPU solvers match to machine precision ($0.0$ error across 20 parameter sets on a $20 \times 15$ grid in float64). Golden regression passes. |
+| Stencil & Geometry Operators | **Validated** | Masked zero-flux Laplacian stencil evaluated exactly on quadratic fields and constants across wall interfaces. Aspect ratio presets supported. |
+| Data Generation Pipeline | **Validated** | Chunked generation with `SeedSequence` spawning ensures reproducible trajectories independent of batch size. Bounds validator verifies $C \ge 0$, $\theta \in [0, 1]$, and monotonic thickness. |
+| Temporal FNO Architecture | **Validated** | Spectral convolution with positive and negative $y$-frequency weight blocks preserves shape, outputs real values, and exhibits translation equivariance under circular shifts. Single-batch overfit verified. |
+| PINO Physics Regularization | **Validated** | Autograd continuous time derivatives match analytic polynomials to machine precision. Residuals evaluated at continuous collocation times and scaled by field standard deviations. |
+| Evaluation & Benchmarking Suite | **Validated** | Model-agnostic batched evaluator computes physical channel metrics (MAE, RMSE, relative $L_2$), bootstrap confidence intervals, train-mean and persistence baselines, and GPC/step coverage errors. |
+| Trained Production Checkpoints | **Pending** | No neural operator model was trained and no large dataset was regenerated during this code remediation pass. Model checkpoints and quantitative surrogate metrics are pending. |
 
 ---
 
-## 3. Neural Operator Architecture
-
-```
-Physical Parameters [p] (5-dim active) ──┐
-Time Coordinate t (1-dim)              ──┤
-Phase State (one-hot, 5-dim)           ──┼──► Spatial Broadcast & Concat ──► Lifting Conv2d (15 -> width)
-Cycle Fraction (1-dim)                 ──┤                                            │
-Domain Geometry Mask (1-dim)           ──┤                                            ▼
-Normalized Grid (x, y) (2-dim)         ──┘                              ┌─────────────────────────┐
-                                                                        │ 4x FourierBlock         │
-                                                                        │  - SpectralConv2d       │
-                                                                        │    (weights W1 & W2)    │
-                                                                        │  - Pointwise Conv2d     │
-                                                                        │  - GELU Activation      │
-                                                                        └─────────────────────────┘
-                                                                                      │
-                                                                                      ▼
-                                                                           Projection Conv2d
-                                                                             (width -> 64 -> 3)
-                                                                                      │
-                                                                                      ▼
-                                                                         Predicted Output Tensor
-                                                                         [C, θ, h](x, y, t)
-```
-
-Each trajectory snapshot at time $t$ is predicted independently given physical parameters $\mathbf{p}$, continuous time $t$, discrete phase state (one-hot), cycle fraction, and spatial coordinates augmented with a domain geometry mask.
-
-### 3.1 Spectral Convolution Layer
-
-The 2D Fourier layer parameterizes integral kernel operators in frequency space:
-
-$$(\mathcal{K}(v))(x) = \mathcal{F}^{-1}\left(R_\phi \cdot (\mathcal{F} v)\right)(x)$$
-
-where $\mathcal{F}$ and $\mathcal{F}^{-1}$ denote the 2D Real Fast Fourier Transform and its inverse. Because the real FFT is non-Hermitian along the spatial $y$-axis and Hermitian-symmetric along the $x$-axis, $R_\phi$ parameterizes two complex weight tensors:
-- $W_1 \in \mathbb{C}^{d_{\text{in}} \times d_{\text{out}} \times k_{\max} \times k_{\max}}$ for positive $y$-frequencies ($k_y \in [0, k_{\max} - 1]$) and non-negative $x$-frequencies ($k_x \in [0, k_{\max} - 1]$).
-- $W_2 \in \mathbb{C}^{d_{\text{in}} \times d_{\text{out}} \times k_{\max} \times k_{\max}}$ for negative $y$-frequencies ($k_y \in [N_y - k_{\max}, N_y - 1]$) and non-negative $x$-frequencies ($k_x \in [0, k_{\max} - 1]$).
-
-Truncating modes above $k_{\max} = 12$ guarantees that the layer is real-valued, shape-preserving, and translation-equivariant for periodic inputs.
-
-### 3.2 Loss Weighting and Physics Residuals
-
-Data loss is aggregated by taking a masked mean per channel before combining with channel weights $w_c$:
-
-$$\mathcal{L}_{\text{data}} = \frac{1}{\sum_{c=1}^3 w_c} \sum_{c=1}^3 w_c \frac{\sum_{(x,y) \in \Omega_c} |y_c(x,y) - \hat{y}_c(x,y)|^2}{|\Omega_c|}$$
-
-where $|\Omega_c|$ is the active element count for channel $c$. This formulation prevents the dense gas domain (thousands of cells) from drowning out sparse surface coverage and thickness targets (a few hundred boundary cells).
-
-The PINO objective regularizes training by penalizing the residual of the governing equations at continuous collocation points:
-
-$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{data}} + \lambda_{\text{physics}} \mathcal{L}_{\text{PDE}}$$
-
-Continuous time derivatives $\partial u / \partial t$ are computed via automatic differentiation (`torch.autograd.grad`) with respect to normalized continuous time $t_{\text{norm}}$, divided by $\sigma_t$. This enables evaluating residuals at arbitrary continuous collocation times without requiring snapshot labels.
-
-**1. Precursor Transport Residual** (evaluated on active gas cells $\Omega_{\text{gas}}$ during dose phase only):
-
-$$\mathcal{R}_C = \frac{1}{\sigma_C} \left( \frac{\partial C}{\partial t} - D \nabla^2 C + \mathbf{1}_{\Gamma_{\text{surf}}} R_{\text{ads}} \right)$$
-
-where $\nabla^2 C$ uses the masked zero-flux boundary stencil from `physics/stencil.py` with solid cells zeroed.
-
-**2. Surface Coverage Residual** (evaluated on surface cells $\Gamma_{\text{surf}}$):
-
-$$\mathcal{R}_\theta = \frac{1}{\sigma_\theta} \left( \frac{\partial \theta}{\partial t} - \delta_{\text{pulse}} (R_{\text{ads}} - R_{\text{des}}) + \delta_{\text{rxn}} R_{\text{rxn}} \right)$$
-
-**3. Film Growth Residual** (evaluated on surface cells $\Gamma_{\text{surf}}$):
-
-$$\mathcal{R}_h = \frac{1}{\sigma_h} \left( \frac{\partial h}{\partial t} - \delta_{\text{rxn}} k_{\text{growth}} R_{\text{rxn}} \right)$$
-
-where $\delta_{\text{pulse}}, \delta_{\text{rxn}} \in \{0, 1\}$ indicate precursor dose and co-reactant reaction stages, respectively. Residuals are nondimensionalized and balanced by their respective field standard deviations $\sigma_C, \sigma_\theta, \sigma_h$.
-
----
-
-## 4. Parameter Ranges and Physical Specifications
-
-All quantities are nondimensionalized as documented in [Formulation](docs/formulation.md). The five varying parameters ($D, k_{\text{ads}}, k_{\text{des}}, k_{\text{rxn}}, t_{\text{pulse}}$) constitute the active network inputs, while constant parameters are dropped.
-
-| Parameter | Symbol | Range / Nominal Value | Description |
-| :--- | :---: | :--- | :--- |
-| Precursor Diffusivity | $D$ | $\mathcal{U}(1.0 \times 10^{-3}, 8.0 \times 10^{-3})$ | Nondimensional diffusion coefficient |
-| Adsorption Rate Constant | $k_{\text{ads}}$ | $\mathcal{U}(0.5, 1.5)$ | First-order surface chemisorption rate |
-| Desorption Rate Constant | $k_{\text{des}}$ | $\mathcal{U}(0.02, 0.10)$ | First-order thermal desorption rate |
-| Co-reactant Reaction Rate | $k_{\text{rxn}}$ | $\mathcal{U}(0.1, 0.8)$ | Surface reaction and conversion rate |
-| Growth Conversion Factor | $k_{\text{growth}}$ | $0.02$ (fixed nominal) | Thickness per converted coverage |
-| Precursor Dose Time | $t_{\text{pulse}}$ | Bimodal: $85\%\; \mathcal{U}(10.0, 60.0)$, $15\%\; \mathcal{U}(60.0, 100.0)$ | Exposure stage duration |
-| Purge Time | $t_{\text{purge}}$ | $1.0$ (fixed nominal) | Inert gas purge duration |
-| Co-reactant Exposure Time | $t_{\text{rxn}}$ | $1.0$ (fixed nominal) | Co-reactant reaction duration |
-| Spatial Domain Resolution | $N_x \times N_y$ | $160 \times 120$ (reference) / $80 \times 60$ (accelerated) | Grid node count |
-
----
-
-## 5. Repository Structure
-
-```
-thin-film-pino/
-├── configs/
-│   ├── default.yaml                # Default model hyperparameters
-│   └── priors.yaml                 # Physical parameter priors and distribution bounds
-├── docs/
-│   ├── figures/                    # Curated figures
-│   ├── archive/                    # Archived historical artifacts
-│   ├── formulation.md              # Mathematical formulation and scaling
-│   └── known_limitations.md        # Documented simulator and surrogate limitations
-├── scripts/
-│   ├── cycle_validation.py         # Multi-cycle GPC stabilization and linearity validation
-│   ├── sweeps.py                   # Parameter and kinetic sweeps (kinetic, pulse subcommands)
-│   ├── pulse_saturation.py         # Self-limiting Langmuir saturation verification
-│   ├── generate_data.py            # Unified dataset generator (trajectory and final_state modes)
-│   ├── prepare_temporal_dataset.py # Stratified splitting with OOD holdout and normalization
-│   ├── validate_transient_dataset.py # Dataset physical invariant and split audit suite
-│   ├── parity.py                   # Multi-sample CPU parity verification between NumPy and PyTorch
-│   ├── grid_convergence.py         # Discretization error and observed spatial order analysis
-│   ├── inspect_dataset.py          # Summary statistics, distributions, and spatial plots
-│   ├── compare_models.py           # Comparative benchmarking across models and baselines
-│   ├── plot_losses.py              # Loss convergence visualization for explicit metric keys
-│   └── plot_qualitative.py         # Multi-snapshot predicted vs. reference field panels
-├── src/
-│   └── thin_film_pino/
-│       ├── data/                   # Data definitions, priors, generation, preparation, validation
-│       ├── evaluation/             # Batched evaluation, physical metrics, baselines, and diagnostics
-│       ├── models/                 # Fourier Neural Operator (FNO) architectures
-│       ├── physics/                # Unified continuum ALD simulators and geometry
-│       └── training/               # Unified training pipeline for FNO and PINO
-├── tests/
-│   ├── test_data_pipeline.py       # Dataset generation, stratification, and validation tests
-│   ├── test_evaluation.py          # Metrics, baselines, bootstrap uncertainty, and diagnostics tests
-│   ├── test_fno.py                 # Spectral convolution, conditioning, and overfit tests
-│   ├── test_physics.py             # Physics, geometry masks, clamping, and solver parity
-│   ├── test_pino.py                # Continuous autograd, collocation sampling, and golden tests
-│   └── test_temporal_operator_loss.py # Masked reduction unit test
-├── pyproject.toml                  # Packaging specification and dependencies
-├── requirements.txt                # Pinned dependency requirements
-└── README.md                       # Technical documentation and workflow guide
-```
-
----
-
-## 6. Reproducible Workflow and CLI Guide
-
-### 6.1 Environment Setup
+## 2. Installation
 
 Install the package in editable mode with development dependencies:
 
 ```bash
+git clone https://github.com/neil6714/thin-film-pino.git
+cd thin-film-pino
 pip install -e .[dev]
 ```
 
-### 6.2 Simulator Parity and Grid Convergence
+---
 
-Verify exact trajectory parity between reference CPU and accelerated PyTorch solvers across sampled parameter sets on matched grids, and evaluate spatial discretization error:
+## 3. Quickstart Smoke Run (CPU, Under Two Minutes)
+
+Run a complete end-to-end verification and training smoke test on a tiny $20 \times 15$ grid:
 
 ```bash
-# Run multi-sample parity verification
+# 1. Run multi-sample solver parity verification
+python scripts/parity.py --num-samples 5 --nx 20 --ny 15
+
+# 2. Generate a 4-sample trajectory dataset across 2 cycles
+python scripts/generate_data.py --num-samples 4 --num-cycles 2 --nx 20 --ny 15 --batch-size 2 --output data/smoke_dataset.npz
+
+# 3. Partition into stratified train/val/test/ood splits and compute normalization statistics
+python scripts/prepare_temporal_dataset.py --input data/smoke_dataset.npz --output data/smoke_prepared.npz
+
+# 4. Train FNO baseline for 2 epochs
+python -m thin_film_pino.training.train --model fno --input data/smoke_prepared.npz --epochs 2 --batch-size 2 --output-dir runs/smoke_fno
+
+# 5. Train PINO with continuous collocation residuals for 2 epochs
+python -m thin_film_pino.training.train --model pino --input data/smoke_prepared.npz --epochs 2 --batch-size 2 --physics-weight 1.0e-4 --output-dir runs/smoke_pino
+
+# 6. Execute full automated test suite
+pytest tests/
+```
+
+---
+
+## 4. Formulation Summary
+
+For derivations, scaling, and assumptions, see [docs/formulation.md](docs/formulation.md).
+
+### 4.1 Units and Reference Scales
+All simulation and model variables are nondimensional. Dimensional quantities relate to nondimensional variables through characteristic scales:
+- Domain height $L_0 \approx 100\text{ nm}$ ($x = \tilde{x}/L_0, y = \tilde{y}/L_0$)
+- Stage time $\tau_0 \approx 1\text{ s}$ ($t = \tilde{t}/\tau_0$)
+- Precursor inlet concentration $C_0 \approx 10^{-2}\text{ mol/m}^3$ ($C = \tilde{C}/C_0$)
+- Surface coverage fraction $\theta = \tilde{\theta}/\theta_{\text{max}} \in [0, 1]$
+- Film thickness $h = \tilde{h}/h_0$
+
+### 4.2 Geometry and Aspect Ratio
+The domain $\Omega = [0, 1] \times [0, 1]$ contains a rectangular feature. The reactive interface $\Gamma_{\text{surf}}$ is partitioned into three disjoint regions:
+- **Field**: Wafer top planar surface outside the trench ($y \le y_{\text{top}}$).
+- **Sidewall**: Vertical trench walls.
+- **Floor**: Horizontal bottom of the trench ($y \ge y_{\text{bottom}}$).
+
+Step coverage is defined as:
+$$\text{Step Coverage} = \frac{\bar{h}_{\text{floor}}}{\bar{h}_{\text{field}}}$$
+
+The default geometry has width $w = 0.25$ and depth $d = 0.45$, giving aspect ratio $AR = 0.45 / 0.25 = 1.80$. A narrow trench preset ($AR = 10.0, w = 0.045$) is available via `SimulationConfig.high_aspect_ratio_preset(10.0)`.
+
+### 4.3 Governing Equations by Stage
+The process is operator-split into four stages per cycle.
+
+**Phase 1: Precursor Dose**
+Vapor diffusion, chemisorption, and thermal desorption occur simultaneously. Thermal desorption is active during this phase:
+$$\frac{\partial C}{\partial t} = D \nabla^2 C - R_{\text{ads}} \quad \text{in } \Omega_{\text{gas}}$$
+$$\frac{\partial \theta}{\partial t} = R_{\text{ads}} - R_{\text{des}} \quad \text{on } \Gamma_{\text{surf}}$$
+$$\frac{\partial h}{\partial t} = 0 \quad \text{on } \Gamma_{\text{surf}}$$
+where $R_{\text{ads}} = k_{\text{ads}} C (1 - \theta)$ and $R_{\text{des}} = k_{\text{des}} \theta$. Boundary condition at top inlet is $C(x, 0, t) = 1.0$.
+
+**Phase 2: Post-Dose Inert Purge**
+Precursor feed is shut off. Thermal desorption is inactive:
+$$\frac{\partial C}{\partial t} = D \nabla^2 C \quad \text{in } \Omega_{\text{gas}}, \quad \frac{\partial \theta}{\partial t} = 0, \quad \frac{\partial h}{\partial t} = 0$$
+Boundary condition at top inlet is $C(x, 0, t) = 0.0$. At the conclusion of this stage, precursor concentration is reset to zero: $C(x, y) \equiv 0$.
+
+**Phase 3: Co-Reactant Reaction and Film Growth**
+Precursor vapor is absent ($C \equiv 0$). Chemisorbed precursor is converted to film:
+$$C(x, y, t) \equiv 0 \quad \text{in } \Omega_{\text{gas}}$$
+$$\frac{\partial \theta}{\partial t} = - k_{\text{rxn}} \theta \quad \text{on } \Gamma_{\text{surf}}$$
+$$\frac{\partial h}{\partial t} = k_{\text{growth}} k_{\text{rxn}} \theta \quad \text{on } \Gamma_{\text{surf}}$$
+
+**Phase 4: Post-Reaction Inert Purge**
+$$\frac{\partial C}{\partial t} = 0, \quad \frac{\partial \theta}{\partial t} = 0, \quad \frac{\partial h}{\partial t} = 0$$
+Precursor concentration remains reset at zero: $C(x, y) \equiv 0$.
+
+### 4.4 Parameter Distributions and Diffusion Timescales
+Parameter bounds follow `configs/priors.yaml`:
+
+| Parameter | Symbol | Range / Value | Description |
+| :--- | :---: | :--- | :--- |
+| Diffusivity | $D$ | $\mathcal{U}(1.0 \times 10^{-3}, 8.0 \times 10^{-3})$ | Constant effective vapor diffusivity |
+| Adsorption Rate | $k_{\text{ads}}$ | $\mathcal{U}(0.5, 1.5)$ | First-order surface chemisorption rate constant |
+| Desorption Rate | $k_{\text{des}}$ | $\mathcal{U}(0.02, 0.10)$ | First-order thermal desorption rate constant |
+| Reaction Rate | $k_{\text{rxn}}$ | $\mathcal{U}(0.1, 0.8)$ | Co-reactant reaction rate constant |
+| Growth Coefficient | $k_{\text{growth}}$ | $0.02$ (constant) | Thickness per converted coverage unit |
+| Dose Exposure Time | $t_{\text{pulse}}$ | Bimodal mixture: $85\%\; [10.0, 60.0], 15\%\; [60.0, 100.0]$ | Precursor exposure stage duration |
+| Purge Duration | $t_{\text{purge}}$ | $1.0$ (constant) | Inert purge stage duration |
+| Reaction Duration | $t_{\text{rxn}}$ | $1.0$ (constant) | Co-reactant exposure stage duration |
+
+The characteristic diffusion time across the domain is $\tau_{\text{diff}} = L^2 / D \approx 25\text{ to } 200\text{ s}$ for $D \in [1.0 \times 10^{-3}, 8.0 \times 10^{-3}]$. The pulse exposure range of 10 to 100 s spans this regime, transitioning from diffusion-limited starved coverage at short pulses to saturation at long pulses.
+
+### 4.5 Stability Limits
+Explicit forward-time central-space time integration is constrained by:
+- Diffusive stability limit: $\Delta t \le \min(\Delta x, \Delta y)^2 / (4 D)$
+- Reaction kinetic limit: $\Delta t \le 1 / \max(k_{\text{ads}}, k_{\text{des}}, k_{\text{rxn}})$
+
+The simulator uses a safety factor of 0.20:
+$$\Delta t = 0.20 \times \min\left( \frac{\min(\Delta x, \Delta y)^2}{D_{\max}}, \frac{1}{\max(k)} \right)$$
+
+### 4.6 Modeling Assumptions
+1. **Operator Splitting**: The four ALD stages execute in sequence.
+2. **Ideal Purge**: Vapor concentration is reset to zero ($C \equiv 0$) after each purge stage. Because the nominal purge duration ($1.0$) is shorter than the diffusion timescale ($25\text{--}200$), clearance is an operational model assumption.
+3. **Mass Non-Conservation**: Precursor adsorption acts as a volumetric gas sink at boundary cells without coupling to physical surface site density, and desorption does not return vapor into the gas domain.
+4. **Incomplete Reaction Carryover**: For $k_{\text{rxn}} \le 0.8$ and $t_{\text{rxn}} = 1.0$, at most $55\%$ of chemisorbed precursor reacts in a cycle. Unreacted coverage carries over into subsequent cycles.
+5. **Numerical Clamping**: Physical invariants $C \ge 0$ and $0 \le \theta \le 1$ are enforced by numerical clamping. Standard parameter sets produce zero clamp activations.
+
+---
+
+## 5. Neural Operator Architecture
+
+Each snapshot is predicted independently given parameters, continuous time, phase, cycle fraction, coordinates, and a geometry mask:
+
+```
+Inputs (15 channels):
+  - Parameters [D, k_ads, k_des, k_rxn, t_pulse] (5 channels)
+  - Continuous time t (1 channel)
+  - One-hot phase code (5 channels)
+  - Cycle fraction (1 channel)
+  - Normalized coordinates (x, y) (2 channels)
+  - Domain geometry gas mask (1 channel)
+                     │
+                     ▼
+  Two-Layer Pointwise Lifting Network: Conv2d(15 -> width) + GELU + Conv2d(width -> width)
+                     │
+                     ▼
+  Four 2D Fourier Blocks:
+    - SpectralConv2d with two complex weight blocks (W1 positive y, W2 negative y)
+    - Pointwise Conv2d(width -> width)
+    - GELU activation
+                     │
+                     ▼
+  Pointwise Projection Network: Conv2d(width -> 64) + GELU + Conv2d(64 -> 3)
+                     │
+                     ▼
+  Predicted Multi-Field Tensor: [C, θ, h](x, y, t)
+```
+
+The training loss uses a per-channel masked mean:
+$$\mathcal{L}_{\text{data}} = \frac{1}{\sum_c w_c} \sum_{c=1}^3 w_c \frac{\sum_{\Omega_c} |y_c - \hat{y}_c|^2}{|\Omega_c|}$$
+preventing dense gas cells from dominating sparse surface cells. PINO adds continuous collocation PDE residuals computed via `torch.autograd.grad` with respect to normalized continuous time, scaled by each field's standard deviation.
+
+---
+
+## 6. Workflow Commands
+
+### 6.1 Parity and Convergence
+```bash
+# Multi-sample parity verification (NumPy vs. PyTorch float64 CPU)
 python scripts/parity.py --num-samples 20 --nx 20 --ny 15 --output results/parity/parity_metrics.json
 
 # Spatial grid convergence analysis (40x30, 80x60, 160x120)
 python scripts/grid_convergence.py --pulse-time 5.0 --output results/convergence/grid_convergence.json
 ```
 
-### 6.3 Transient Trajectory Generation and Preparation
-
-Generate an accelerated ensemble of ALD trajectories and partition into train/val/test splits:
-
+### 6.2 Data Pipeline
 ```bash
-# 1. Generate trajectory dataset (or --mode final_state)
+# Generate trajectory dataset (or --mode final_state)
 python scripts/generate_data.py --mode trajectory --num-samples 64 --batch-size 16 --output data/transient_ald_dataset.npz
 
-# 2. Stratify and partition into train (70%), validation (15%), test (15%), and OOD holdout
+# Stratified split into train (70%), val (15%), test (15%), and long-pulse OOD holdout
 python scripts/prepare_temporal_dataset.py --input data/transient_ald_dataset.npz --output data/transient_ald_prepared.npz
 
-# 3. Audit dataset integrity and physical bounds
+# Validate physical bounds and split coverage
 python scripts/validate_transient_dataset.py --input data/transient_ald_prepared.npz
 ```
 
-### 6.4 Neural Operator Training
-
-Train baseline FNO and physics-informed models using shared optimizer, scheduler, gradient clipping, and seed controls:
-
+### 6.3 Surrogate Training
 ```bash
-# Train baseline Temporal Fourier Neural Operator (TFNO)
+# Train FNO baseline
 python -m thin_film_pino.training.train --model fno --input data/transient_ald_prepared.npz --epochs 50 --batch-size 4 --output-dir runs/fno
 
-# Train Physics-Informed Neural Operator (PINO)
+# Train PINO
 python -m thin_film_pino.training.train --model pino --input data/transient_ald_prepared.npz --epochs 50 --batch-size 4 --physics-weight 1.0e-4 --output-dir runs/pino
 
-# Multi-seed execution
+# Multi-seed run
 python -m thin_film_pino.training.train --model fno --input data/transient_ald_prepared.npz --seeds 123,456,789 --output-dir runs/fno_multiseed
 ```
 
-### 6.5 Evaluation and Comparative Benchmarking
-
-Evaluate checkpoints on held-out test splits using batched inference, bootstrap uncertainty intervals, baseline predictors (train-mean, persistence), and physics diagnostics:
-
+### 6.4 Evaluation and Comparison
 ```bash
-# Evaluate checkpoint with physical metrics, baselines, and diagnostics
+# Batched checkpoint evaluation with baselines and bootstrap uncertainty
 python -m thin_film_pino.evaluation.evaluate --input data/transient_ald_prepared.npz --checkpoint runs/fno/best_model.pt --output-dir runs/evaluation
 
-# Cross-compare models and baselines with per-channel panels
+# Comparative benchmarking across models and baselines
 python scripts/compare_models.py --input data/transient_ald_prepared.npz --operator runs/fno/best_model.pt --pino runs/pino/best_model.pt --output runs/comparison
 
-# Generate multi-snapshot predicted vs. reference field visualizations
+# Multi-snapshot predicted vs. reference field panels
 python scripts/plot_qualitative.py --input data/transient_ald_prepared.npz --checkpoint runs/fno/best_model.pt --output-dir runs/evaluation/qualitative --trajectory-index 0
 
-# Plot loss trajectories for explicit keys
+# Plot loss convergence for explicit metric keys
 python scripts/plot_losses.py --root runs --keys train_loss val_loss --output runs/loss_trajectories.png
-```
-
-### 6.6 Unit Testing
-
-Execute automated unit tests:
-
-```bash
-pytest tests/
 ```
 
 ---
 
-## 7. Numerical Standards and Verification
+## 7. Results
 
-- **Bounds Enforcement**: Physical bounds $\theta(x, y, t) \in [0.0, 1.0]$ and $C(x, y, t) \ge 0.0$ are enforced by numerical clamping and monitored via `clamp_stats` activation counters. Default simulation configurations produce zero clamp activations.
-- **Solver Parity**: Reference NumPy and PyTorch accelerated simulators share unified geometry masks and discrete stencil operators, exhibiting exact numerical parity on matched discretizations.
-- **Split Integrity**: Trajectory splits are disjoint and normalization statistics are computed strictly on the training partition without cross-split leakage.
-- **Sanity Baselines**: Training logs the train-mean baseline ($\hat{y} = 0$ in normalized units, yielding approximately $1.0$ MSE). Unit test suites verify that the network overfits a single batch to low loss.
+No neural operator surrogate was trained and no full dataset was regenerated during this code remediation pass. Surrogate benchmarking figures and quantitative error comparisons are pending training execution.
+
+### Verified Solver Metrics
+The following verification results are committed and reproducible:
+1. **NumPy vs. PyTorch Parity** (`scripts/parity.py`, commit `43293fa`):
+   - Grid: $20 \times 15$, float64 CPU, 20 parameter samples.
+   - Mid-dose concentration max absolute error: $0.0$, relative $L_2$: $0.0$.
+   - Final state ($C, \theta, h$) max absolute error: $0.0$.
+2. **Golden Run Regression** (`tests/test_physics.py::test_golden_regression_matches`):
+   - Verified against [tests/data/golden_regression.npz](tests/data/golden_regression.npz) ($40 \times 30$ grid, 2 cycles) to machine precision ($< 10^{-12}$).
+3. **Discrete Laplacian Accuracy** (`tests/test_physics.py::test_stencil_laplacian_properties`):
+   - Exact $0.0$ on constant fields across wall boundaries.
+   - Analytic agreement ($2a + 2b$) on quadratic fields on interior gas cells.
+
+---
+
+## 8. Limitations
+
+See [docs/known_limitations.md](docs/known_limitations.md) for detailed discussion. Key constraints:
+- **Ideal Purge**: Complete vapor clearance after each purge is an operational simplification.
+- **Mass Conservation**: Precursor gas sink is not balanced with absolute site density, and desorption does not return vapor to the gas domain.
+- **Incomplete Reaction**: Up to $45\%$ to $90\%$ of adsorbed coverage carries over across cycles for lower $k_{\text{rxn}}$ values.
+- **Constant Diffusivity**: Transport uses constant effective diffusivity without pressure-dependent Knudsen corrections.
+- **Explicit Time Steps**: Bounded by diffusive stability limit $\min(\Delta x, \Delta y)^2 / (4D)$ and reaction kinetic limit $1 / \max(k)$.
+
+---
+
+## 9. Repository Structure
+
+```
+thin-film-pino/
+├── configs/
+│   ├── default.yaml                # Model hyperparameters
+│   └── priors.yaml                 # Parameter priors and distribution bounds
+├── docs/
+│   ├── data_schema.md              # Array schemas, shapes, axes, dtypes, phase codes
+│   ├── formulation.md              # Governing equations, scaling, and architecture
+│   └── known_limitations.md        # Documented simulator and surrogate limitations
+├── scripts/
+│   ├── compare_models.py           # Cross-model evaluation comparison with baselines
+│   ├── cycle_validation.py         # Multi-cycle GPC linearity verification
+│   ├── generate_data.py            # Unified trajectory and final-state dataset generator
+│   ├── grid_convergence.py         # Discretization error and spatial order analysis
+│   ├── inspect_dataset.py          # Summary statistics, distributions, and spatial plots
+│   ├── parity.py                   # Multi-sample CPU parity verification
+│   ├── plot_losses.py              # Loss convergence visualization
+│   ├── plot_qualitative.py         # Multi-snapshot predicted vs. reference field panels
+│   ├── prepare_temporal_dataset.py # Stratified splitting with OOD holdout and normalization
+│   ├── pulse_saturation.py         # Self-limiting Langmuir saturation verification
+│   ├── sweeps.py                   # Kinetic and pulse exposure parameter sweeps
+│   └── validate_transient_dataset.py # Dataset physical invariant and split audit suite
+├── src/
+│   └── thin_film_pino/
+│       ├── data/                   # Priors, sampling, generation, preparation, validation
+│       ├── evaluation/             # Batched evaluation, metrics, baselines, visualization
+│       ├── models/                 # Fourier Neural Operator architecture
+│       ├── physics/                # Continuum ALD simulators, geometry, and stencils
+│       └── training/               # Unified training pipeline for FNO and PINO
+├── tests/
+│   ├── data/                       # Golden regression artifacts
+│   ├── test_data_pipeline.py       # Dataset generation, stratification, validation
+│   ├── test_evaluation.py          # Metrics, baselines, bootstrap uncertainty
+│   ├── test_fno.py                 # Spectral convolution and conditioning
+│   ├── test_physics.py             # Physics, geometry masks, clamping, solver parity
+│   ├── test_pino.py                # Continuous autograd and collocation sampling
+│   └── test_temporal_operator_loss.py # Masked reduction unit tests
+├── pyproject.toml                  # Package configuration and dependencies
+├── requirements.txt                # Pinned dependency requirements
+├── CITATION.cff                    # Citation metadata
+├── LICENSE                         # MIT License
+└── README.md                       # Repository overview and documentation
+```
+
+---
+
+## 10. Related Work
+
+1. **Fourier Neural Operator (FNO)**:
+   Li, Z., Kovachki, N., Azizzadenesheli, K., Liu, B., Bhattacharya, K., Stuart, A., & Anandkumar, A. (2021). Fourier Neural Operator for Parametric Partial Differential Equations. In *International Conference on Learning Representations (ICLR 2021)*.
+2. **Physics-Informed Neural Operator (PINO)**:
+   Li, Z., Zheng, H., Kovachki, N., Jin, D., Chen, H., Liu, B., Azizzadenesheli, K., & Anandkumar, A. (2024). Physics-Informed Neural Operator for Learning Partial Differential Equations. *ACM/IMS Journal of Data Science*, 1(3), 1–28.
+3. **Kinetic ALD Modeling in Narrow Trenches**:
+   Gordon, R. G., Hausmann, D., Kim, E., & Shepard, J. (2003). A Kinetic Model for Step Coverage by Atomic Layer Deposition in Narrow Holes or Trenches. *Chemical Vapor Deposition*, 9(2), 73–78.
+4. **Diffusion-Reaction ALD in Nanostructures**:
+   Yanguas-Gil, A., & Elam, J. W. (2012). Self-Limited Reaction-Diffusion in Nanostructured Substrates: Surface Coverage Dynamics and Analytic Approximations to ALD Saturation Times. *Chemical Vapor Deposition*, 18(1–3), 46–52.
+
+---
+
+## 11. Citation
+
+If you use this work, please cite:
+
+```bibtex
+@software{thin_film_pino,
+  author = {Neil Pandit},
+  title = {Thin-Film PINO: Transient Atomic Layer Deposition Simulator and Neural Operator Surrogate},
+  year = {2026},
+  url = {https://github.com/neil6714/thin-film-pino}
+}
+```
+
+---
+
+## 12. License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.

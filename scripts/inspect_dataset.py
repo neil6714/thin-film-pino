@@ -17,15 +17,13 @@ from thin_film_pino.data.validate import validate_dataset
 
 def print_summary(data: Mapping[str, Any]) -> None:
     """Print tensor schema, shapes, and dtypes for all archived arrays."""
-    print("\nDataset Summary")
-    print("-" * 60)
+    print("\nDataset Summary:")
     for key in sorted(data.keys()):
         arr = data[key]
         if hasattr(arr, "shape"):
             print(f"{key:24s} shape={str(arr.shape):20s} dtype={arr.dtype}")
 
-    print("\nPhysical Parameter Distributions")
-    print("-" * 60)
+    print("\nPhysical Parameter Distributions:")
     param_key = "raw_parameters" if "raw_parameters" in data else "parameters"
     if param_key in data:
         params = data[param_key]
@@ -41,8 +39,7 @@ def print_summary(data: Mapping[str, Any]) -> None:
                 f"mean={vals.mean():.6e} std={vals.std():.6e}"
             )
 
-    print("\nField Statistics")
-    print("-" * 60)
+    print("\nField Statistics:")
     for key in (
         "concentration",
         "surface_coverage",
@@ -150,8 +147,7 @@ def main() -> None:
 
     # Delegate validation directly to validator rather than duplicating checks
     passed, report = validate_dataset(data, input_path=input_path)
-    print("\nDataset Verification Summary")
-    print("-" * 60)
+    print("\nDataset Verification Summary:")
     print(f"Overall Status: {'PASS' if passed else 'FAIL'}")
     for name, res in report["checks"].items():
         print(f"[{'PASS' if res else 'FAIL':4s}] {name}")
