@@ -15,43 +15,80 @@ import numpy as np
 import torch
 
 from thin_film_pino.models.fno import TemporalFourierOperator
+from thin_film_pino.training.train import compute_normalized_coordinates, load_dataset_in_memory
 
 
 def evaluate(
-    data: Mapping[str, Any], checkpoint_path: Union[str, Path], width: int = 32, modes: int = 12
+    data: Mapping[str, Any],
+    checkpoint_path: Union[str, Path],
+    width: int = 32,
+    modes: int = 12,
 ) -> Dict[str, float]:
     """Compute physical MAE metrics across concentration, coverage, and thickness channels."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    cfg = ckpt.get("args", {})
+    checkpoint_path = Path(checkpoint_path).resolve()
+
+    # Load model weights safely with weights_only=True
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=True)
+    state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+
+    config_path = checkpoint_path.parent / "best_model_config.json"
+    cfg: Dict[str, Any] = {}
+    if config_path.exists():
+        try:
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            cfg = {}
+
+    arch_cfg = cfg.get("architecture", {})
+    model_width = arch_cfg.get("width", width)
+    model_modes = arch_cfg.get("modes", modes)
+    num_blocks = arch_cfg.get("num_blocks", 4)
+    param_dim = arch_cfg.get("parameter_dim", data["parameters"].shape[-1])
+    num_phases = arch_cfg.get("num_phases", 5)
+    include_cycle = arch_cfg.get("include_cycle", True)
 
     model = TemporalFourierOperator(
-        parameter_dim=data["parameters"].shape[-1],
-        width=cfg.get("width", width),
-        modes=cfg.get("modes", modes),
+        parameter_dim=param_dim,
+        spatial_channels=3,
+        num_phases=num_phases,
+        include_cycle=include_cycle,
+        output_channels=3,
+        width=model_width,
+        modes=model_modes,
+        num_blocks=num_blocks,
     ).to(device)
-    model.load_state_dict(ckpt["model"])
+    model.load_state_dict(state_dict)
     model.eval()
 
-    coords = (
-        torch.stack(
-            torch.meshgrid(
-                torch.as_tensor(data["y"], device=device),
-                torch.as_tensor(data["x"], device=device),
-                indexing="ij",
-            ),
-            dim=0,
-        ).float()
-        * 2.0
-        - 1.0
-    )
+    coords_2d = compute_normalized_coordinates(data["x"], data["y"], device)
+    gas_mask_t = torch.as_tensor(~data["solid_mask"], device=device).float().unsqueeze(0)
+    spatial_coords = torch.cat([coords_2d, gas_mask_t], dim=0)
 
     test_idx = data["test_indices"]
-    params = torch.as_tensor(data["parameters"][test_idx], device=device)
-    time = torch.as_tensor(data["time"][test_idx], device=device)
+    params = torch.as_tensor(data["parameters"][test_idx], device=device).float()
+    time = torch.as_tensor(data["time"][test_idx], device=device).float()
+
+    phase = (
+        torch.as_tensor(data["phase"][test_idx], device=device).long() if "phase" in data else None
+    )
+
+    if "cycle" in data:
+        max_c = float(np.max(data["cycle"])) or 10.0
+        cycle_frac = torch.as_tensor(
+            data["cycle"][test_idx].astype(np.float32) / max_c, device=device
+        )
+    else:
+        cycle_frac = None
 
     with torch.no_grad():
-        pred = model(params, time, coords)
+        pred = model(
+            params,
+            time,
+            spatial_coords,
+            phase=phase,
+            cycle_fraction=cycle_frac,
+        )
 
     target = torch.as_tensor(
         np.stack(
@@ -63,12 +100,11 @@ def evaluate(
             axis=2,
         ),
         device=device,
-    )
+    ).float()
 
-    mask = torch.as_tensor(
-        np.stack([~data["solid_mask"], data["surface_mask"], data["surface_mask"]]),
-        device=device,
-    ).float()[None, None]
+    surface_mask_t = torch.as_tensor(data["surface_mask"], device=device).float().unsqueeze(0)
+    channel_masks = torch.cat([gas_mask_t, surface_mask_t, surface_mask_t], dim=0)
+    mask = channel_masks[None, None]
     scale = torch.as_tensor(data["field_std"], device=device)[None, None, :, None, None]
 
     err = (pred - target).abs() * scale
@@ -107,7 +143,7 @@ def main() -> None:
 
     out_dir = Path(args.output).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    data = np.load(args.input)
+    data = load_dataset_in_memory(Path(args.input).resolve())
 
     rows: Dict[str, Dict[str, Any]] = {}
     models_to_evaluate = [
@@ -127,7 +163,7 @@ def main() -> None:
         if metrics_file.exists() and name in rows:
             try:
                 m_data = json.loads(metrics_file.read_text(encoding="utf-8"))
-                reported_loss = m_data.get("test_loss", m_data.get("best_validation_data_loss"))
+                reported_loss = m_data.get("test_loss", m_data.get("best_validation_loss"))
                 rows[name]["reported_loss"] = reported_loss
             except (OSError, json.JSONDecodeError):
                 pass

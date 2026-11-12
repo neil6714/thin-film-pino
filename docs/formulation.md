@@ -165,3 +165,28 @@ User-supplied $\Delta t$ values are validated against both limits and rejected i
 - **Step Coverage**: Ratio of deposited thickness on trench floor to deposited thickness on top planar field:
   $$\text{Step Coverage} = \frac{\bar{h}_{\text{floor}}}{\bar{h}_{\text{field}}}$$
 - **Saturation Coverage**: Mean fractional coverage $\bar{\theta}$ measured at the conclusion of the precursor dose stage, prior to co-reactant consumption.
+
+---
+
+## 8. Neural Operator Surrogate Formulation
+
+The surrogate model $\mathcal{G}_\phi$ parameterizes the mapping from process parameters, continuous time, discrete phase, and geometry to continuous spatial field distributions:
+
+$$\mathcal{G}_\phi: (\mathbf{p}, t, \text{phase}, \text{cycle\_fraction}, x, y, \text{mask}) \mapsto (C, \theta, h)(x, y, t)$$
+
+### 8.1 Snapshot-Independent Formulation
+Each trajectory snapshot at time $t$ is predicted independently:
+1. Physical process parameters $\mathbf{p} \in \mathbb{R}^5$ (active parameters: $D, k_{\text{ads}}, k_{\text{des}}, k_{\text{rxn}}, t_{\text{pulse}}$) and continuous time $t$ are augmented with a one-hot encoding of the discrete stage index ($\text{phase} \in \{0, 1, 2, 3, 4\}$) and normalized cycle progress ($\text{cycle\_fraction} \in [0, 1]$).
+2. Scalar conditionings are spatially broadcast across the 2D grid and concatenated with normalized spatial coordinates $(x, y) \in [-1, 1]^2$ and a binary geometry mask $\mathbf{1}_{\Omega_{\text{gas}}}$.
+3. The 15-channel composite representation is lifted via pointwise linear projections into hidden dimension $d_v = 32$, passed through 4 stacked Fourier blocks, and projected to 3 output field channels $(C, \theta, h)$.
+
+### 8.2 Spectral Convolution Kernels
+The 2D Fourier layers compute integral kernel transforms using two complex weight tensors $W_1, W_2$:
+- $W_1$ acts on positive $y$-frequencies and non-negative $x$-frequencies.
+- $W_2$ acts on negative $y$-frequencies and non-negative $x$-frequencies.
+High frequencies beyond mode cutoff $k_{\max} = 12$ are truncated, guaranteeing that the layer is real-valued, shape-preserving, and translation-equivariant for periodic inputs.
+
+### 8.3 Loss Weighting and Physics Regularization
+The training loss uses per-channel masked mean aggregation:
+$$\mathcal{L}_{\text{data}} = \frac{1}{\sum_c w_c} \sum_{c=1}^3 w_c \frac{\sum_{\Omega_c} |y_c - \hat{y}_c|^2}{|\Omega_c|}$$
+preventing the thousands of gas nodes from dominating the sparse surface nodes. In PINO training, intra-phase central difference PDE residuals $\mathcal{R}_C, \mathcal{R}_\theta, \mathcal{R}_h$ regularize training without crossing discontinuous phase boundaries.

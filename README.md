@@ -90,25 +90,29 @@ User-supplied time steps that exceed the von Neumann limit $\min(\Delta x, \Delt
 ## 3. Neural Operator Architecture
 
 ```
-Physical Parameters [p] (8-dim) ──┐
-Time Coordinate t (1-dim)       ──┼──► Spatial Broadcast & Concat ──► Lifting Conv2d (11 -> width)
-Normalized Grid (x, y) (2-dim)  ──┘                                           │
-                                                                              ▼
-                                                                ┌─────────────────────────┐
-                                                                │ 4x FourierBlock         │
-                                                                │  - SpectralConv2d       │
-                                                                │  - Pointwise Conv2d     │
-                                                                │  - GELU Activation      │
-                                                                └─────────────────────────┘
-                                                                              │
-                                                                              ▼
-                                                                   Projection Conv2d
-                                                                     (width -> 64 -> 3)
-                                                                              │
-                                                                              ▼
-                                                                 Predicted Output Tensor
-                                                                 [C, θ, h](x, y, t)
+Physical Parameters [p] (5-dim active) ──┐
+Time Coordinate t (1-dim)              ──┤
+Phase State (one-hot, 5-dim)           ──┼──► Spatial Broadcast & Concat ──► Lifting Conv2d (15 -> width)
+Cycle Fraction (1-dim)                 ──┤                                            │
+Domain Geometry Mask (1-dim)           ──┤                                            ▼
+Normalized Grid (x, y) (2-dim)         ──┘                              ┌─────────────────────────┐
+                                                                        │ 4x FourierBlock         │
+                                                                        │  - SpectralConv2d       │
+                                                                        │    (weights W1 & W2)    │
+                                                                        │  - Pointwise Conv2d     │
+                                                                        │  - GELU Activation      │
+                                                                        └─────────────────────────┘
+                                                                                      │
+                                                                                      ▼
+                                                                           Projection Conv2d
+                                                                             (width -> 64 -> 3)
+                                                                                      │
+                                                                                      ▼
+                                                                         Predicted Output Tensor
+                                                                         [C, θ, h](x, y, t)
 ```
+
+Each trajectory snapshot at time $t$ is predicted independently given physical parameters $\mathbf{p}$, continuous time $t$, discrete phase state (one-hot), cycle fraction, and spatial coordinates augmented with a domain geometry mask.
 
 ### 3.1 Spectral Convolution Layer
 
@@ -116,15 +120,25 @@ The 2D Fourier layer parameterizes integral kernel operators in frequency space:
 
 $$(\mathcal{K}(v))(x) = \mathcal{F}^{-1}\left(R_\phi \cdot (\mathcal{F} v)\right)(x)$$
 
-where $\mathcal{F}$ and $\mathcal{F}^{-1}$ denote the 2D Real Fast Fourier Transform and its inverse, with learnable complex frequency weight tensor truncated at cutoff mode $k_{\max} = 12$.
+where $\mathcal{F}$ and $\mathcal{F}^{-1}$ denote the 2D Real Fast Fourier Transform and its inverse. Because the real FFT is non-Hermitian along the spatial $y$-axis and Hermitian-symmetric along the $x$-axis, $R_\phi$ parameterizes two complex weight tensors:
+- $W_1 \in \mathbb{C}^{d_{\text{in}} \times d_{\text{out}} \times k_{\max} \times k_{\max}}$ for positive $y$-frequencies ($k_y \in [0, k_{\max} - 1]$) and non-negative $x$-frequencies ($k_x \in [0, k_{\max} - 1]$).
+- $W_2 \in \mathbb{C}^{d_{\text{in}} \times d_{\text{out}} \times k_{\max} \times k_{\max}}$ for negative $y$-frequencies ($k_y \in [N_y - k_{\max}, N_y - 1]$) and non-negative $x$-frequencies ($k_x \in [0, k_{\max} - 1]$).
 
-### 3.2 Physics-Informed Residual Formulation
+Truncating modes above $k_{\max} = 12$ guarantees that the layer is real-valued, shape-preserving, and translation-equivariant for periodic inputs.
 
-The optimization objective combines masked data loss with phase-aware continuum residuals:
+### 3.2 Loss Weighting and Physics Residuals
+
+Data loss is aggregated by taking a masked mean per channel before combining with channel weights $w_c$:
+
+$$\mathcal{L}_{\text{data}} = \frac{1}{\sum_{c=1}^3 w_c} \sum_{c=1}^3 w_c \frac{\sum_{(x,y) \in \Omega_c} |y_c(x,y) - \hat{y}_c(x,y)|^2}{|\Omega_c|}$$
+
+where $|\Omega_c|$ is the active element count for channel $c$. This formulation prevents the dense gas domain (thousands of cells) from drowning out sparse surface coverage and thickness targets (a few hundred boundary cells).
+
+The PINO objective regularizes training with intra-phase PDE residuals:
 
 $$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{data}} + \lambda_{\text{physics}} \mathcal{L}_{\text{PDE}}$$
 
-where the PDE residual penalty $\mathcal{L}_{\text{PDE}}$ evaluates:
+where finite differences are restricted strictly to snapshots within the same phase to avoid differentiating across discontinuous stage boundaries:
 
 **1. Precursor Transport Residual** (over active gas cells $\Omega_{\text{gas}}$):
 
@@ -144,7 +158,7 @@ where $\delta_{\text{pulse}}, \delta_{\text{rxn}} \in \{0, 1\}$ indicate precurs
 
 ## 4. Parameter Ranges and Physical Specifications
 
-All quantities are nondimensionalized as documented in [Formulation](docs/formulation.md).
+All quantities are nondimensionalized as documented in [Formulation](docs/formulation.md). The five varying parameters ($D, k_{\text{ads}}, k_{\text{des}}, k_{\text{rxn}}, t_{\text{pulse}}$) constitute the active network inputs, while constant parameters are dropped.
 
 | Parameter | Symbol | Range / Nominal Value | Description |
 | :--- | :---: | :--- | :--- |
@@ -192,6 +206,7 @@ thin-film-pino/
 │       └── training/               # Unified training pipeline for FNO and PINO
 ├── tests/
 │   ├── test_data_pipeline.py       # Dataset generation, stratification, and validation tests
+│   ├── test_fno.py                 # Spectral convolution, conditioning, and overfit tests
 │   ├── test_physics.py             # Physics, geometry masks, clamping, and solver parity
 │   └── test_temporal_operator_loss.py # Masked reduction unit test
 ├── pyproject.toml                  # Packaging specification and dependencies
@@ -236,7 +251,7 @@ python scripts/validate_transient_dataset.py --input data/transient_ald_prepared
 
 ### 6.4 Neural Operator Training
 
-Train baseline FNO and physics-informed models:
+Train baseline FNO and physics-informed models using shared optimizer, scheduler, gradient clipping, and seed controls:
 
 ```bash
 # Train baseline Temporal Fourier Neural Operator (TFNO)
@@ -244,11 +259,14 @@ python -m thin_film_pino.training.train --model fno --input data/transient_ald_p
 
 # Train Physics-Informed Neural Operator (PINO)
 python -m thin_film_pino.training.train --model pino --input data/transient_ald_prepared.npz --epochs 50 --batch-size 4 --physics-weight 1.0e-4 --output-dir runs/pino
+
+# Multi-seed execution
+python -m thin_film_pino.training.train --model fno --input data/transient_ald_prepared.npz --seeds 123,456,789 --output-dir runs/fno_multiseed
 ```
 
 ### 6.5 Evaluation and Comparative Benchmarking
 
-Evaluate checkpoints on the shared held-out test split:
+Evaluate checkpoints on the shared held-out test split using `weights_only=True`:
 
 ```bash
 # Evaluate FNO checkpoint
@@ -276,3 +294,4 @@ pytest tests/
 - **Bounds Enforcement**: Physical bounds $\theta(x, y, t) \in [0.0, 1.0]$ and $C(x, y, t) \ge 0.0$ are enforced by numerical clamping and monitored via `clamp_stats` activation counters. Default simulation configurations produce zero clamp activations.
 - **Solver Parity**: Reference NumPy and PyTorch accelerated simulators share unified geometry masks and discrete stencil operators, exhibiting exact numerical parity on matched discretizations.
 - **Split Integrity**: Trajectory splits are disjoint and normalization statistics are computed strictly on the training partition without cross-split leakage.
+- **Sanity Baselines**: Training logs the train-mean baseline ($\hat{y} = 0$ in normalized units, yielding approximately $1.0$ MSE). Unit test suites verify that the network overfits a single batch to low loss.

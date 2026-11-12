@@ -3,7 +3,11 @@ model: fno
 epochs: 50
 batch_size: 4
 learning_rate: 1.0e-3
+weight_decay: 1.0e-5
+grad_clip: 1.0
 width: 32
 modes: 12
+num_blocks: 4
 seed: 123
 physics_weight: 1.0e-4
+channel_weights: [1.0, 1.0, 1.0]

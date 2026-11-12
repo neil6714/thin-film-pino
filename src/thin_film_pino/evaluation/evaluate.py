@@ -11,6 +11,7 @@ import numpy as np
 import torch
 
 from thin_film_pino.models.fno import TemporalFourierOperator
+from thin_film_pino.training.train import compute_normalized_coordinates, load_dataset_in_memory
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,35 +45,65 @@ def evaluate_checkpoint(
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     input_path = Path(input_path).resolve()
-    data = np.load(input_path)
+    data = load_dataset_in_memory(input_path)
 
     checkpoint_path = Path(checkpoint_path).resolve()
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    config = checkpoint.get("args", {})
+    # Load weights safely with weights_only=True
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=True)
+    state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
 
-    width = config.get("width", 32)
-    modes = config.get("modes", 12)
-    param_dim = data["parameters"].shape[-1]
-    model = TemporalFourierOperator(parameter_dim=param_dim, width=width, modes=modes).to(device)
-    model.load_state_dict(checkpoint["model"])
+    # Load configuration JSON if present alongside checkpoint
+    config_path = checkpoint_path.parent / "best_model_config.json"
+    if not config_path.exists():
+        config_path = checkpoint_path.parent / "checkpoint_config.json"
+
+    cfg: Dict[str, Any] = {}
+    if config_path.exists():
+        try:
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            cfg = {}
+
+    arch_cfg = cfg.get("architecture", {})
+    width = arch_cfg.get("width", 32)
+    modes = arch_cfg.get("modes", 12)
+    num_blocks = arch_cfg.get("num_blocks", 4)
+    param_dim = arch_cfg.get("parameter_dim", data["parameters"].shape[-1])
+    num_phases = arch_cfg.get("num_phases", 5)
+    include_cycle = arch_cfg.get("include_cycle", True)
+
+    model = TemporalFourierOperator(
+        parameter_dim=param_dim,
+        spatial_channels=3,
+        num_phases=num_phases,
+        include_cycle=include_cycle,
+        output_channels=3,
+        width=width,
+        modes=modes,
+        num_blocks=num_blocks,
+    ).to(device)
+    model.load_state_dict(state_dict)
     model.eval()
 
-    coords = (
-        torch.stack(
-            torch.meshgrid(
-                torch.as_tensor(data["y"], device=device),
-                torch.as_tensor(data["x"], device=device),
-                indexing="ij",
-            ),
-            dim=0,
-        ).float()
-        * 2.0
-        - 1.0
-    )
+    coords_2d = compute_normalized_coordinates(data["x"], data["y"], device)
+    gas_mask_t = torch.as_tensor(~data["solid_mask"], device=device).float().unsqueeze(0)
+    spatial_coords = torch.cat([coords_2d, gas_mask_t], dim=0)
 
     test_idx = data["test_indices"]
-    parameters = torch.as_tensor(data["parameters"][test_idx], device=device)
-    time = torch.as_tensor(data["time"][test_idx], device=device)
+    parameters = torch.as_tensor(data["parameters"][test_idx], device=device).float()
+    time = torch.as_tensor(data["time"][test_idx], device=device).float()
+
+    phase = (
+        torch.as_tensor(data["phase"][test_idx], device=device).long() if "phase" in data else None
+    )
+
+    if "cycle" in data:
+        max_c = float(np.max(data["cycle"])) or 10.0
+        cycle_frac = torch.as_tensor(
+            data["cycle"][test_idx].astype(np.float32) / max_c, device=device
+        )
+    else:
+        cycle_frac = None
 
     target_fields = np.stack(
         [
@@ -82,15 +113,20 @@ def evaluate_checkpoint(
         ],
         axis=2,
     )
-    target = torch.as_tensor(target_fields, device=device)
+    target = torch.as_tensor(target_fields, device=device).float()
 
-    mask = torch.as_tensor(
-        np.stack([~data["solid_mask"], data["surface_mask"], data["surface_mask"]]),
-        device=device,
-    ).float()[None, None]
+    surface_mask_t = torch.as_tensor(data["surface_mask"], device=device).float().unsqueeze(0)
+    channel_masks = torch.cat([gas_mask_t, surface_mask_t, surface_mask_t], dim=0)
+    mask = channel_masks[None, None]
 
     with torch.no_grad():
-        prediction = model(parameters, time, coords)
+        prediction = model(
+            parameters,
+            time,
+            spatial_coords,
+            phase=phase,
+            cycle_fraction=cycle_frac,
+        )
 
     diff = prediction - target
     valid = mask.expand_as(diff)
@@ -114,7 +150,7 @@ def evaluate_checkpoint(
         mae_norm = float((diff[:, :, c].abs() * v).sum() / n)
         rmse_norm = float(torch.sqrt((diff[:, :, c].square() * v).sum() / n))
 
-        ss_tot = (y_true_phys - y_true_phys.mean()).square().sum().clamp_min(1e-12)
+        ss_tot = (y_true_phys - y_true_phys.mean()).square().sum().clamp_min(1.0e-12)
         r2_phys = float(1.0 - (e_phys.square().sum() / ss_tot))
 
         metrics[name] = {
