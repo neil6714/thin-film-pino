@@ -197,17 +197,19 @@ thin-film-pino/
 │   ├── validate_transient_dataset.py # Dataset physical invariant and split audit suite
 │   ├── validate_cuda_reference.py  # Reference CPU vs. accelerated PyTorch parity verifier
 │   ├── inspect_dataset.py          # Summary statistics, distributions, and spatial plots
-│   ├── compare_models.py           # Comparative benchmarking across models
-│   └── plot_losses.py              # Unified loss convergence visualization
+│   ├── compare_models.py           # Comparative benchmarking across models and baselines
+│   ├── plot_losses.py              # Loss convergence visualization for explicit metric keys
+│   └── plot_qualitative.py         # Multi-snapshot predicted vs. reference field panels
 ├── src/
 │   └── thin_film_pino/
 │       ├── data/                   # Data definitions, priors, generation, preparation, validation
-│       ├── evaluation/             # Checkpoint evaluation on held-out test data
+│       ├── evaluation/             # Batched evaluation, physical metrics, baselines, and diagnostics
 │       ├── models/                 # Fourier Neural Operator (FNO) architectures
 │       ├── physics/                # Unified continuum ALD simulators and geometry
 │       └── training/               # Unified training pipeline for FNO and PINO
 ├── tests/
 │   ├── test_data_pipeline.py       # Dataset generation, stratification, and validation tests
+│   ├── test_evaluation.py          # Metrics, baselines, bootstrap uncertainty, and diagnostics tests
 │   ├── test_fno.py                 # Spectral convolution, conditioning, and overfit tests
 │   ├── test_physics.py             # Physics, geometry masks, clamping, and solver parity
 │   ├── test_pino.py                # Continuous autograd, collocation sampling, and golden tests
@@ -269,17 +271,20 @@ python -m thin_film_pino.training.train --model fno --input data/transient_ald_p
 
 ### 6.5 Evaluation and Comparative Benchmarking
 
-Evaluate checkpoints on the shared held-out test split using `weights_only=True`:
+Evaluate checkpoints on held-out test splits using batched inference, bootstrap uncertainty intervals, baseline predictors (train-mean, persistence), and physics diagnostics:
 
 ```bash
-# Evaluate FNO checkpoint
+# Evaluate checkpoint with physical metrics, baselines, and diagnostics
 python -m thin_film_pino.evaluation.evaluate --input data/transient_ald_prepared.npz --checkpoint runs/fno/best_model.pt --output-dir runs/evaluation
 
-# Cross-compare models on identical test trajectories
+# Cross-compare models and baselines with per-channel panels
 python scripts/compare_models.py --input data/transient_ald_prepared.npz --operator runs/fno/best_model.pt --pino runs/pino/best_model.pt --output runs/comparison
 
-# Plot unified convergence curves
-python scripts/plot_losses.py --root runs --output runs/loss_trajectories.png
+# Generate multi-snapshot predicted vs. reference field visualizations
+python scripts/plot_qualitative.py --input data/transient_ald_prepared.npz --checkpoint runs/fno/best_model.pt --output-dir runs/evaluation/qualitative --trajectory-index 0
+
+# Plot loss trajectories for explicit keys
+python scripts/plot_losses.py --root runs --keys train_loss val_loss --output runs/loss_trajectories.png
 ```
 
 ### 6.6 Unit Testing
