@@ -168,43 +168,52 @@ $$
 
 from the parameter and coordinate space $\mathcal{A}$ to the spatiotemporal solution field manifold $\mathcal{U}$.
 
-```
-Input Features (15 Channels):
-  [D, k_ads, k_des, k_rxn, t_pulse] (5 parameter channels, spatially broadcast)
-  + Continuous Normalized Time t   (1 temporal channel)
-  + One-Hot Phase Indicator        (5 categorical phase channels)
-  + Cycle Fraction                (1 normalized cycle channel)
-  + Spatial Coordinates (x, y)     (2 spatial channels)
-  + Solid/Gas Geometry Mask        (1 domain channel)
-                   │
-                   ▼
-  Two-Layer Pointwise Lifting Network P: Conv2d(15 -> width) + GELU + Conv2d(width -> width)
-                   │
-                   ▼
-  ┌────────────────────────────────────────────────────────┐
-  │ Stacked Fourier Integral Operator Layer (x 4 Blocks)   │
-  │                                                        │
-  │  v_{l+1}(x, y) = GELU( W v_l(x, y) + \mathcal{K} v_l ) │
-  │                                                        │
-  │  \mathcal{K} v_l = \mathcal{F}^{-1} [ R \cdot \mathcal{F}(v_l) ]                        │
-  │  Dual Complex Weights: W_1 (Positive k_y), W_2 (Negative k_y)                           │
-  └────────────────────────────────────────────────────────┘
-                   │
-                   ▼
-  Two-Layer Pointwise Projection Network Q: Conv2d(width -> 64) + GELU + Conv2d(64 -> 3)
-                   │
-                   ▼
-Predicted Solution Fields: [C, θ, h](x, y, t)
+```mermaid
+flowchart TD
+    subgraph Inputs["Input Features (15 Channels)"]
+        direction TB
+        in1["Physical Parameters: D, k_ads, k_des, k_rxn, t_pulse (5 channels)"]
+        in2["Continuous Time: t_norm (1 channel)"]
+        in3["One-Hot Phase State: 5 channels"]
+        in4["Cycle Fraction: c / N_cycles (1 channel)"]
+        in5["Spatial Coordinates: (x, y) (2 channels)"]
+        in6["Geometry Domain: Gas Mask (1 channel)"]
+    end
+
+    Lifting["Pointwise Lifting Network P<br/>Conv2d(15 → width) + GELU + Conv2d(width → width)"]
+
+    subgraph FNO["Fourier Operator Layers (4 Stacked Blocks)"]
+        direction TB
+        F1["Spectral Convolution K<br/>Dual Complex Weight Blocks (W_1 for +k_y, W_2 for -k_y)<br/>Cutoff Modes: k_max = 12"]
+        F2["Local Linear Residual Path W<br/>Pointwise Conv2d(width → width)"]
+        F3["Nonlinear Activation<br/>GELU( K(v) + W(v) )"]
+        F1 --- F2 --> F3
+    end
+
+    Projection["Pointwise Projection Network Q<br/>Conv2d(width → 64) + GELU + Conv2d(64 → 3)"]
+
+    Outputs["Predicted Solution Fields (3 Channels)<br/>[Concentration C, Surface Coverage θ, Film Thickness h]"]
+
+    Inputs --> Lifting
+    Lifting --> FNO
+    FNO --> Projection
+    Projection --> Outputs
 ```
 
-### 2.2 Fourier Neural Operator (FNO)
-The Fourier Neural Operator represents the non-local kernel integral via the fast Fourier transform (FFT):
+The mathematical transformation across layer $l$ is defined as:
 
 $$
-(\mathcal{K} v_t)(x, y) = \mathcal{F}^{-1} \left( R \cdot (\mathcal{F} v_t) \right)(x, y)
+v_{l+1}(x, y) = \mathrm{GELU}\left( W v_l(x, y) + (\mathcal{K}_\phi v_l)(x, y) \right)
 $$
 
-Because real physical ALD domains have non-periodic vertical boundary conditions (inlet at $y = 0$, trench bottom at $y = 1$), the implementation utilizes a dual-weight spectral convolution block:
+where $W$ is a local pointwise linear operator and $\mathcal{K}_\phi$ is a non-local kernel integral parameterized in frequency space via the 2D Fast Fourier Transform:
+
+$$
+(\mathcal{K}_\phi v_l)(x, y) = \mathcal{F}^{-1} \left[ R_\phi(k_x, k_y) \cdot (\mathcal{F} v_l)(k_x, k_y) \right](x, y)
+$$
+
+### 2.2 Dual-Weight Spectral Convolution for Non-Periodic Boundaries
+Because real physical ALD domains have non-periodic vertical boundary conditions (Dirichlet precursor vapor inlet at $y = 0$, solid substrate trench bottom at $y = 1$), standard periodic Fourier convolutions introduce boundary Gibbs artifacts. To address this, the implementation utilizes a dual-weight spectral convolution block:
 - Weight block $W_1$ acts on positive vertical wavenumber modes ($k_y \ge 0$).
 - Weight block $W_2$ acts on negative vertical wavenumber modes ($k_y < 0$).
 
