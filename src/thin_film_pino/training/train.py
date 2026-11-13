@@ -101,6 +101,18 @@ def parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
         help="Regularization weight for PDE residual penalty (PINO mode).",
     )
     parser.add_argument(
+        "--max-train-trajectories",
+        type=int,
+        default=None,
+        help="Optional maximum number of training trajectories for few-shot experiments.",
+    )
+    parser.add_argument(
+        "--collocation-points",
+        type=int,
+        default=2,
+        help="Number of collocation points per phase for continuous physics loss.",
+    )
+    parser.add_argument(
         "--channel-weights",
         type=float,
         nargs=3,
@@ -315,8 +327,12 @@ def train_single_run(
     is_pino = args.model == "pino"
     num_cycles = int(data.get("cycle", np.zeros(1)).max()) or 10
 
+    train_indices = data["train_indices"]
+    if getattr(args, "max_train_trajectories", None) is not None and args.max_train_trajectories > 0:
+        train_indices = train_indices[: args.max_train_trajectories]
+
     train_loader = make_loader(
-        data, data["train_indices"], args.batch_size, shuffle=True, num_cycles=num_cycles
+        data, train_indices, args.batch_size, shuffle=True, num_cycles=num_cycles
     )
     val_loader = make_loader(
         data, data["validation_indices"], args.batch_size, shuffle=False, num_cycles=num_cycles
@@ -427,6 +443,7 @@ def train_single_run(
             b_size = params.shape[0]
 
             if is_pino:
+                num_colloc = getattr(args, "collocation_points", 2)
                 pde_loss, pde_metrics = compute_physics_loss(
                     model=model,
                     parameters_norm=params,
@@ -437,7 +454,7 @@ def train_single_run(
                     stats=(field_mean, field_std, time_mean, time_std),
                     dx=dx,
                     dy=dy,
-                    num_collocation_per_phase=2,
+                    num_collocation_per_phase=num_colloc,
                     num_cycles=num_cycles,
                     k_growth=0.02,
                 )
@@ -550,7 +567,7 @@ def train_single_run(
         "test_mae_normalized": float(test_mae),
         "train_mean_baseline_mse": float(mean_mse),
         "train_mean_baseline_mae": float(mean_mae),
-        "train_trajectories": int(len(data["train_indices"])),
+        "train_trajectories": int(len(train_indices)),
         "validation_trajectories": int(len(data["validation_indices"])),
         "test_trajectories": int(len(data["test_indices"])),
         "grid": [int(data["y"].shape[0]), int(data["x"].shape[0])],
