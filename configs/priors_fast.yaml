@@ -1,0 +1,59 @@
+# Fast benchmark priors: pulse times capped at 60.0s, 3 cycles, 40x30 grid
+
+parameters:
+  diffusivity:
+    type: uniform
+    low: 1.0e-3
+    high: 8.0e-3
+    description: "Precursor gas diffusivity D (nondimensional)"
+  k_ads:
+    type: uniform
+    low: 0.5
+    high: 1.5
+    description: "Adsorption rate constant k_ads (1/time)"
+  k_des:
+    type: uniform
+    low: 0.02
+    high: 0.10
+    description: "Thermal desorption rate constant k_des (1/time)"
+  k_rxn:
+    type: uniform
+    low: 0.1
+    high: 0.8
+    description: "Co-reactant reaction rate constant k_rxn (1/time)"
+  k_growth:
+    type: constant
+    value: 0.02
+    description: "Film thickness conversion coefficient per unit converted coverage"
+  pulse_time:
+    type: bimodal
+    short_fraction: 0.85
+    short_low: 10.0
+    short_high: 50.0
+    long_low: 50.0
+    long_high: 60.0
+    description: "Precursor dose exposure duration capped at 60s"
+  purge_time:
+    type: constant
+    value: 1.0
+    description: "Inert purge duration"
+  reaction_time:
+    type: constant
+    value: 1.0
+    description: "Co-reactant exposure duration"
+  post_purge_time:
+    type: constant
+    value: 1.0
+    description: "Post-reaction purge duration"
+
+grid:
+  nx: 40
+  ny: 30
+  lx: 1.0
+  ly: 1.0
+  trench_left: 0.375
+  trench_right: 0.625
+  trench_top: 0.50
+  trench_bottom: 0.95
+  default_cycles: 3
+  snapshots_per_phase: 8
