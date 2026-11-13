@@ -270,6 +270,33 @@ Benchmark curves and qualitative spatial maps are saved in [docs/figures/](docs/
 - [Predicted vs True Concentration](docs/figures/colab_qualitative_concentration.png)
 - [Predicted vs True Film Thickness](docs/figures/colab_qualitative_film_thickness.png)
 
+### 7.3 Few-Shot and Out-of-Distribution (OOD) Benchmark
+To evaluate the inductive bias of physics regularization, a few-shot benchmark was executed on Google Colab with training restricted to 16 trajectories ($10\%$ of training data) and physics weight $\lambda_{\text{physics}} = 0.02$ with 4 continuous autograd collocation points per phase (commit `ffe9531`).
+
+#### In-Distribution Test Partition (N = 35 trajectories)
+- **Transport PDE Residual MSE**: FNO was $0.3708$; PINO was **$0.3159$** (14.8% reduction in physical residual).
+- **Physical MAE**:
+  - Concentration: FNO $2.5704 \times 10^{-1}\text{ mol/m}^3$, PINO $2.5660 \times 10^{-1}\text{ mol/m}^3$.
+  - Surface Coverage: FNO $1.4871 \times 10^{-1}$, PINO $1.4841 \times 10^{-1}$.
+  - Film Thickness: FNO $3.2280 \times 10^{-3}\text{ m}$, PINO $3.2391 \times 10^{-3}\text{ m}$.
+- **Bounds Check**: $C < 0$ rate was 2.82% (PINO) versus 2.95% (FNO).
+
+#### Out-of-Distribution Holdout Partition (N = 26 long-pulse trajectories)
+| Metric | Pure FNO (16 Traj) | PINO (16 Traj, $\lambda=0.02$) | Difference / Impact |
+| :--- | :--- | :--- | :--- |
+| **Transport PDE Residual MSE** | 1.8777e-01 | **1.4971e-01** | **20.3% reduction in PDE violation** |
+| **Coverage PDE Residual MSE** | 1.3061e-01 | **1.2427e-01** | **4.9% reduction** |
+| **Film Growth Residual MSE** | 8.5535e-02 | **8.2236e-02** | **3.9% reduction** |
+| **Negative Concentration Rate ($C < 0$)** | 0.84% | **0.76%** | Fewer unphysical mass artifacts |
+| **Coverage Out-of-Bounds Rate ($\theta \notin [0, 1]$)** | 0.66% | **0.65%** | Stricter Langmuir saturation |
+
+The benchmark demonstrates that when trajectory data is constrained, continuous PDE collocation anchors the surrogate outside the training manifold, systematically lowering governing equation violations across transport, surface coverage, and growth dynamics.
+
+Few-shot benchmark artifacts are saved in [docs/figures/](docs/figures/):
+- [Few-Shot Loss Trajectories](docs/figures/colab_fewshot_loss_trajectories.png)
+- [Few-Shot Test Physical MAE](docs/figures/colab_fewshot_physical_mae_test.png)
+- [Few-Shot OOD Physical MAE](docs/figures/colab_fewshot_physical_mae_ood.png)
+
 ---
 
 ## 8. Limitations
