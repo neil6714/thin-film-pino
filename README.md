@@ -1,7 +1,11 @@
 # Physics-Informed Neural Operator for Transient Atomic Layer Deposition
 
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-007ACC?logo=python&logoColor=white)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-74C043.svg)](LICENSE)
+[![Framework: PyTorch](https://img.shields.io/badge/Framework-PyTorch-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![Surrogate: FNO / PINO](https://img.shields.io/badge/Surrogate-FNO%20%2F%20PINO-800080.svg)](#)
+[![Physics: Continuum ALD](https://img.shields.io/badge/Physics-Continuum%20ALD-0284C7.svg)](#)
 [![CI](https://github.com/neil6714/thin-film-pino/actions/workflows/ci.yml/badge.svg)](https://github.com/neil6714/thin-film-pino/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A continuum simulator and scientific machine learning surrogate for transient atomic layer deposition (ALD) in microelectronic trench features. The numerical engine models multi-species vapor transport, Langmuir surface kinetics, and thin-film growth using an operator-split forward-time central-space (FTCS) finite-difference scheme. The neural surrogate framework employs a Temporal Fourier Neural Operator (FNO) regularized with continuous autograd-derived partial differential equation (PDE) collocation residuals (PINO).
 
