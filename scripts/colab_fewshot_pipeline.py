@@ -7,9 +7,9 @@ import time
 
 
 def run_stream(cmd, desc):
-    print(f"\n=======================================================", flush=True)
+    print("\n=======================================================", flush=True)
     print(f"=== [STAGE] {desc}", flush=True)
-    print(f"=======================================================", flush=True)
+    print("=======================================================", flush=True)
     t0 = time.time()
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     for line in p.stdout:

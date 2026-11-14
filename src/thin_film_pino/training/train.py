@@ -328,7 +328,10 @@ def train_single_run(
     num_cycles = int(data.get("cycle", np.zeros(1)).max()) or 10
 
     train_indices = data["train_indices"]
-    if getattr(args, "max_train_trajectories", None) is not None and args.max_train_trajectories > 0:
+    if (
+        getattr(args, "max_train_trajectories", None) is not None
+        and args.max_train_trajectories > 0
+    ):
         train_indices = train_indices[: args.max_train_trajectories]
 
     train_loader = make_loader(
